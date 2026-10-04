@@ -3,7 +3,7 @@ import { JobManager } from './jobManager.js';
 import { TranslationScheduler } from './scheduler.js';
 import { generateContiguousEpub, generateContiguousTxt } from './epubGenerator.js';
 import { translateChunkSafely } from './geminiTranslator.js';
-import { detectChapters, chunkChapter } from './textSplitter.js';
+import { detectChapters, chunkChapter, createOptimizedBatches, MAX_BATCH_CHAR_BUDGET, ATOMIC_CHUNK_CHAR_BUDGET } from './textSplitter.js';
 import { Chunk, Job } from './types.js';
 import { validateTranslation, hasExpectedChapterMarkers } from './translationValidator.js';
 import { splitTranslatedBatch } from './textSplitter.js';
@@ -62,6 +62,35 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
     if (!hasExpectedChapterMarkers(translated, [1, 2])) throw new Error('Chapter markers were not recognized');
     const split = splitTranslatedBatch('<<<OMNI_CHAPTER_START index=\"1\">>>\n第一章\n<<<OMNI_CHAPTER_END index=\"1\">>>\n<<<OMNI_CHAPTER_START index=\"2\">>>\n第二章\n<<<OMNI_CHAPTER_END index=\"2\">>>', translated, [1, 2], ['第1章', '第2章']);
     if (split.get(1) !== 'Chapter One' || split.get(2) !== 'Chapter Two') throw new Error('Marker-based chapter reassembly failed');
+  });
+
+  // Test 0b: 2,500 atomic pieces packed into <=7,000-char Gemini batches
+  await runTest('0b. Atomic 2,500 / batch 7,000 packing', async () => {
+    const makeChapter = (n: number, length: number) => {
+      const unit = '这是一个用于验证批处理边界、顺序和完整性的测试句子。';
+      let text = `第${n}章 测试\n`;
+      while (text.length < length) text += unit + '\n\n';
+      return text.slice(0, length);
+    };
+    const source = [makeChapter(1, 4200), makeChapter(2, 2200), makeChapter(3, 1800)].join('\n');
+    const chapters = detectChapters(source);
+    const batches = createOptimizedBatches(chapters, MAX_BATCH_CHAR_BUDGET);
+    if (!batches.length) throw new Error('No translation batches were created');
+
+    const markerRe = /<<<OMNI_(?:CHAPTER_(?:START|END)\s+index="\d+"|PIECE_(?:START|END)\s+chapter="\d+"\s+piece="\d+"\s+total="\d+")>>>/g;
+    for (const batch of batches) {
+      const sourceOnly = batch.originalText.replace(markerRe, '');
+      if (sourceOnly.length > MAX_BATCH_CHAR_BUDGET) {
+        throw new Error(`Batch ${batch.batchIndex} exceeds ${MAX_BATCH_CHAR_BUDGET}: ${sourceOnly.length}`);
+      }
+      const pieces = [...batch.originalText.matchAll(/<<<OMNI_PIECE_START/g)].length;
+      if (pieces < 1) throw new Error(`Batch ${batch.batchIndex} has no atomic piece markers`);
+    }
+
+    const large = makeChapter(99, ATOMIC_CHUNK_CHAR_BUDGET * 3 + 100);
+    const largePieces = createOptimizedBatches(detectChapters(large), MAX_BATCH_CHAR_BUDGET);
+    if (largePieces.length < 2) throw new Error('Large chapter was not split into atomic pieces');
+    console.log(`[TEST INFO] 2,500/7,000 packing: ${batches.length} batches; large chapter -> ${largePieces.length} batches`);
   });
 
   // Test 1: Five-key concurrency (max 5 simultaneous keys)

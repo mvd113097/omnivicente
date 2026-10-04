@@ -115,8 +115,9 @@ Strict rules:
 3. Preserve paragraph breaks, sentence structure, and dialogue accurately.
 4. Do NOT output any translator notes (TL note), commentary, explanations, prefaces, or conclusions.
 5. Output ONLY the translated story text.
-6. If the input contains markers matching <<<OMNI_CHAPTER_START index="N">>> and <<<OMNI_CHAPTER_END index="N">>>, copy every marker EXACTLY, in the same order. Never translate, remove, rename, or invent a marker.
-7. Preserve the number and order of non-empty paragraph lines. Do not merge or omit paragraphs.`;
+6. If the input contains <<<OMNI_CHAPTER_START index="N">>> / <<<OMNI_CHAPTER_END index="N">>> markers, copy every chapter marker EXACTLY, in the same order. Never translate, remove, rename, omit, or invent one.
+7. If the input contains <<<OMNI_PIECE_START chapter="N" piece="P" total="T">>> / <<<OMNI_PIECE_END ...>>> markers, copy every piece marker EXACTLY, in the same order. Never translate, remove, rename, omit, or invent one.
+8. Preserve the number and order of non-empty paragraph lines inside each piece. Do not merge or omit paragraphs.`;
 
 // High-quota model cascade sequence
 export const MODEL_CASCADE = [
@@ -141,17 +142,31 @@ async function callGeminiApiSingle(
   apiKey: string,
   modelName: string
 ): Promise<TranslationResult> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const cleanKey = (apiKey || '').trim().replace(/^["']|["']$/g, '');
+  const isBearer = cleanKey.startsWith('ya29.');
+
+  const url = isBearer
+    ? `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (isBearer) {
+    headers['Authorization'] = `Bearer ${cleanKey}`;
+  } else {
+    headers['x-goog-api-key'] = cleanKey;
+  }
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify({
         systemInstruction: {
@@ -211,6 +226,32 @@ async function callGeminiApiSingle(
   }
 
   return { text: outputText, isTruncated: false };
+}
+
+/**
+ * Quick validation probe for an API key.
+ */
+export async function testGeminiApiKey(apiKey: string): Promise<{ valid: boolean; status: 'valid' | 'rate_limited' | 'invalid' | 'empty'; message: string }> {
+  const cleanKey = (apiKey || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleanKey) {
+    return { valid: false, status: 'empty', message: 'Empty API key' };
+  }
+  try {
+    await translateTextWithGemini('你好', cleanKey);
+    return { valid: true, status: 'valid', message: 'Key is active and responsive' };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    if (err instanceof GeminiRateLimitError || err?.status === 429) {
+      return { valid: true, status: 'rate_limited', message: 'Key valid, but currently rate-limited (429 cooldown)' };
+    }
+    if (err instanceof GeminiAuthError || err?.status === 401 || msg.includes('401') || msg.includes('invalid authentication')) {
+      return { valid: false, status: 'invalid', message: 'Authentication failed (401 invalid key)' };
+    }
+    if (err instanceof GeminiPermissionError || err?.status === 403 || msg.includes('403')) {
+      return { valid: false, status: 'invalid', message: 'Permission denied (403 key restricted)' };
+    }
+    return { valid: false, status: 'invalid', message: msg };
+  }
 }
 
 /**
@@ -311,9 +352,46 @@ export async function translateChunkSafely(
     throw new Error('Gemini output remained truncated after safe source splitting; chunk was not accepted.');
   }
 
+  // Prefer splitting at explicit atomic piece boundaries. This is safer than
+  // splitting raw text because it cannot cut a marker pair or a translated
+  // 2,500-character recovery unit in half.
+  const pieceBlocks = [...sourceText.matchAll(/<<<OMNI_PIECE_START\s+chapter="(\d+)"\s+piece="(\d+)"\s+total="(\d+)">>>[\s\S]*?<<<OMNI_PIECE_END\s+chapter="\1"\s+piece="\2"\s+total="\3">>>/g)].map((m) => m[0]);
+  if (pieceBlocks.length > 1) {
+    const midpoint = Math.ceil(pieceBlocks.length / 2);
+    const part1Pieces = pieceBlocks.slice(0, midpoint);
+    const part2Pieces = pieceBlocks.slice(midpoint);
+    const sourceHasChapterMarkers = /<<<OMNI_CHAPTER_START\s+index="\d+">>>/.test(sourceText);
+    const wrapPart = (pieces: string[]) => {
+      if (!pieces.length) return '';
+      if (!sourceHasChapterMarkers) return pieces.join('\n');
+
+      const out: string[] = [];
+      let currentChapter: number | null = null;
+      for (const piece of pieces) {
+        const m = piece.match(/<<<OMNI_PIECE_START\s+chapter="(\d+)"/);
+        const chapter = m ? Number(m[1]) : null;
+        if (chapter === null) {
+          out.push(piece);
+          continue;
+        }
+        if (chapter !== currentChapter) {
+          if (currentChapter !== null) out.push(`<<<OMNI_CHAPTER_END index="${currentChapter}">>>`);
+          out.push(`<<<OMNI_CHAPTER_START index="${chapter}">>>`);
+          currentChapter = chapter;
+        }
+        out.push(piece);
+      }
+      if (currentChapter !== null) out.push(`<<<OMNI_CHAPTER_END index="${currentChapter}">>>`);
+      return out.join('\n');
+    };
+    const trans1 = await translateChunkSafely(wrapPart(part1Pieces), apiKey, depth + 1);
+    const trans2 = await translateChunkSafely(wrapPart(part2Pieces), apiKey, depth + 1);
+    return `${trans1}\n\n${trans2}`;
+  }
+
   // Multi-chapter batches contain explicit chapter marker blocks. Never split
   // inside one of those blocks during truncation recovery.
-  const chapterBlocks = [...sourceText.matchAll(/<<<OMNI_CHAPTER_START\s+index=\"\d+\">>>[\s\S]*?<<<OMNI_CHAPTER_END\s+index=\"\d+\">>>/g)].map((m) => m[0]);
+  const chapterBlocks = [...sourceText.matchAll(/<<<OMNI_CHAPTER_START\s+index="\d+">>>[\s\S]*?<<<OMNI_CHAPTER_END\s+index="\d+">>>/g)].map((m) => m[0]);
   if (chapterBlocks.length > 1) {
     const midpoint = Math.ceil(chapterBlocks.length / 2);
     const part1 = chapterBlocks.slice(0, midpoint).join('\n\n');

@@ -17,8 +17,11 @@ import {
   ChevronRight,
   ShieldCheck,
   BookOpen,
-  Trash2
+  Trash2,
+  KeyRound,
+  Sparkles
 } from 'lucide-react';
+import { ApiKeyManager } from './components/ApiKeyManager.js';
 
 interface JobStatus {
   id: string;
@@ -52,6 +55,11 @@ export default function App() {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Gemini API Keys State
+  const [keysModalOpen, setKeysModalOpen] = useState(false);
+  const [apiKeys, setApiKeys] = useState<string[]>([]);
+  const [keysCount, setKeysCount] = useState(0);
+
   // Settings & Telegram State
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [telegramToken, setTelegramToken] = useState('');
@@ -79,6 +87,38 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastEtagRef = useRef<string | null>(null);
 
+  // Fetch configured Gemini API keys
+  const fetchApiKeys = async () => {
+    try {
+      const res = await fetch('/api/keys');
+      if (res.ok) {
+        const data = await res.json();
+        setKeysCount(data.count || 0);
+        setApiKeys(Array.isArray(data.rawKeys) ? data.rawKeys : []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch keys:', err);
+    }
+  };
+
+  const handleSaveApiKeys = async (newKeys: string[]) => {
+    try {
+      const res = await fetch('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: newKeys }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setKeysCount(data.count || 0);
+        setApiKeys(newKeys);
+        setErrorMessage(null);
+      }
+    } catch (err) {
+      console.error('Failed to save keys:', err);
+    }
+  };
+
   // Fetch configured Telegram notification settings
   const fetchTelegramSettings = async () => {
     try {
@@ -101,6 +141,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    fetchApiKeys();
     fetchTelegramSettings();
   }, []);
 
@@ -323,7 +364,7 @@ export default function App() {
     } catch (err: any) {
       setErrorMessage(err.message);
       if (err.message.includes('Gemini API keys')) {
-        setSettingsModalOpen(true);
+        setKeysModalOpen(true);
       }
     } finally {
       setIsActionLoading(false);
@@ -458,6 +499,21 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
+                fetchApiKeys();
+                setKeysModalOpen(true);
+              }}
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Configure 5 Gemini API Keys for Rotation"
+            >
+              <KeyRound className={`w-3.5 h-3.5 ${keysCount > 0 ? 'text-amber-600' : 'text-slate-400'}`} />
+              <span className="hidden xs:inline">Gemini Keys</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-semibold ${keysCount > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'}`}>
+                {keysCount}/5
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
                 setTestsModalOpen(true);
                 if (!testResults) handleRunTests();
               }}
@@ -512,6 +568,30 @@ export default function App() {
               <p className="text-xs text-slate-500 mb-3 leading-relaxed">
                 Drop a TXT novel to start translating.
               </p>
+
+              {keysCount === 0 && (
+                <div className="mb-4 p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-left flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <KeyRound className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-bold text-amber-900">Configure 5 Gemini API Keys</h4>
+                      <p className="text-[11px] text-amber-800 leading-tight mt-0.5">
+                        Add up to 5 keys to enable round-robin multi-key rotation.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchApiKeys();
+                      setKeysModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors shadow-xs"
+                  >
+                    Add 5 Keys
+                  </button>
+                </div>
+              )}
 
               <div
                 onDragOver={(e) => e.preventDefault()}
@@ -1078,6 +1158,14 @@ export default function App() {
           <span>Contiguous Export Guaranteed</span>
         </div>
       </footer>
+
+      {/* Gemini API Key Manager Modal */}
+      <ApiKeyManager
+        isOpen={keysModalOpen}
+        onClose={() => setKeysModalOpen(false)}
+        keys={apiKeys}
+        onSaveKeys={handleSaveApiKeys}
+      />
     </div>
   );
 }

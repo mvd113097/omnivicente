@@ -31,18 +31,19 @@ export class TranslationScheduler {
     return this.instance;
   }
 
-  refreshKeys(): void {
+  refreshKeys(forceReset: boolean = false): void {
     const configuredKeys = Store.getKeys();
     const now = Date.now();
     this.keyStates = configuredKeys.map((key) => {
       const existing = this.keyStates.find((k) => k.key === key);
-      if (existing) {
+      if (existing && !forceReset) {
         if (existing.cooldownUntil <= now) {
           existing.cooldownUntil = 0;
+          existing.disabledReason = undefined;
         }
         return existing;
       }
-      return { key, isBusy: false, cooldownUntil: 0 };
+      return { key, isBusy: false, cooldownUntil: 0, disabledReason: undefined };
     });
   }
 

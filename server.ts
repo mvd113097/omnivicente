@@ -269,8 +269,9 @@ app.get('/api/jobs/:id/export/txt', async (req, res) => {
 });
 
 import { sendTelegramTest } from './src/server/telegram.js';
+import { testGeminiApiKey } from './src/server/geminiTranslator.js';
 
-// 9. Get Configured Keys (Masked)
+// 9. Get Configured Keys
 app.get('/api/keys', (req, res) => {
   const keys = Store.getKeys();
   const masked = keys.map((k, index) => {
@@ -280,6 +281,7 @@ app.get('/api/keys', (req, res) => {
   res.json({
     count: keys.length,
     keys: masked,
+    rawKeys: keys,
   });
 });
 
@@ -291,8 +293,33 @@ app.post('/api/keys', (req, res) => {
   }
   const validKeys = keys.filter((k) => typeof k === 'string' && k.trim().length > 0).slice(0, 5);
   Store.saveKeys(validKeys);
-  TranslationScheduler.getInstance().refreshKeys();
+  TranslationScheduler.getInstance().refreshKeys(true);
   res.json({ success: true, count: validKeys.length });
+});
+
+// 10.1 Test Keys Connectivity
+app.post('/api/test-keys', async (req, res) => {
+  try {
+    const { keys } = req.body;
+    if (!Array.isArray(keys)) {
+      return res.status(400).json({ success: false, error: 'keys must be an array' });
+    }
+    const results = await Promise.all(
+      keys.map(async (key: string, index: number) => {
+        const prefix = key.length > 8 ? `${key.slice(0, 4)}...${key.slice(-4)}` : `Key #${index + 1}`;
+        const testRes = await testGeminiApiKey(key);
+        return {
+          index,
+          prefix,
+          status: testRes.status,
+          message: testRes.message,
+        };
+      })
+    );
+    res.json({ success: true, results });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // 11. Get Telegram Notification Settings

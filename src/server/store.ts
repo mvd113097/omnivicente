@@ -36,7 +36,7 @@ function atomicWriteJsonSync(filePath: string, data: unknown): void {
 }
 
 function countEnglishWords(text: string): number {
-  const clean = text.replace(/<<<OMNI_CHAPTER_(?:START|END)\s+index=\"\d+\">>>/g, ' ').trim();
+  const clean = text.replace(/<<<OMNI_(?:CHAPTER_(?:START|END)\s+index="\d+"|PIECE_(?:START|END)\s+chapter="\d+"\s+piece="\d+"\s+total="\d+")>>>/g, ' ').trim();
   return clean ? clean.split(/\s+/).filter(Boolean).length : 0;
 }
 
@@ -44,6 +44,7 @@ function readJson<T>(filePath: string): T | null {
   try {
     if (!fs.existsSync(filePath)) return null;
     const content = fs.readFileSync(filePath, 'utf-8');
+    if (!content || !content.trim()) return null;
     return JSON.parse(content) as T;
   } catch (err) {
     console.error(`Failed to read JSON at ${filePath}:`, err);

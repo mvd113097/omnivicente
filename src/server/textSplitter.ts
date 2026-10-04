@@ -96,39 +96,53 @@ export function detectChapters(fullText: string): ParsedChapter[] {
 }
 
 /**
- * Splits a chapter that exceeds the batch budget into sequential pieces at paragraph/sentence boundaries.
- * Guarantees zero lost text and exact ordering.
+ * Atomic source unit used for quota-efficient batching.
+ * MegaTXT-style scheduling keeps small recovery units while combining adjacent
+ * units into larger Gemini requests. 2,500 is the source-unit target and
+ * 7,000 is the maximum source-character budget of one Gemini batch.
+ */
+export const ATOMIC_CHUNK_CHAR_BUDGET = 2500;
+
+/**
+ * Splits text into deterministic atomic pieces at paragraph/sentence boundaries.
+ * A piece never exceeds maxSize unless a single sentence is itself longer than
+ * maxSize, in which case it is hard-split so the request budget remains bounded.
  */
 export function splitLargeChapter(
   chapterText: string,
-  targetSize: number = 6000,
-  maxSize: number = MAX_BATCH_CHAR_BUDGET
+  targetSize: number = ATOMIC_CHUNK_CHAR_BUDGET,
+  maxSize: number = ATOMIC_CHUNK_CHAR_BUDGET
 ): string[] {
-  if (chapterText.length <= maxSize) {
-    return [chapterText];
-  }
+  if (chapterText.length <= maxSize) return [chapterText];
 
   const paragraphs = chapterText.split(/(?<=\n)/);
   const pieces: string[] = [];
   let currentBuffer = '';
 
-  for (const para of paragraphs) {
-    if (currentBuffer.length + para.length > targetSize && currentBuffer.length > 0) {
+  const flush = () => {
+    if (currentBuffer.length > 0) {
       pieces.push(currentBuffer);
       currentBuffer = '';
     }
+  };
+
+  for (const para of paragraphs) {
+    if (currentBuffer.length + para.length > targetSize && currentBuffer.length > 0) {
+      flush();
+    }
 
     if (para.length > maxSize) {
-      // Long paragraph without newlines: split by sentence delimiters
       const sentences = para.split(/(?<=[。！？!?…\n])/);
       for (const sent of sentences) {
+        if (!sent) continue;
         if (currentBuffer.length + sent.length > targetSize && currentBuffer.length > 0) {
-          pieces.push(currentBuffer);
-          currentBuffer = '';
+          flush();
         }
         if (sent.length > maxSize) {
           for (let i = 0; i < sent.length; i += targetSize) {
-            pieces.push(sent.slice(i, i + targetSize));
+            const slice = sent.slice(i, i + targetSize);
+            if (slice.length === targetSize) pieces.push(slice);
+            else currentBuffer += slice;
           }
         } else {
           currentBuffer += sent;
@@ -139,91 +153,146 @@ export function splitLargeChapter(
     }
   }
 
-  if (currentBuffer.length > 0) {
-    pieces.push(currentBuffer);
+  flush();
+  return pieces.length ? pieces : [chapterText];
+}
+
+interface AtomicPiece {
+  chapterIndex: number;
+  chapterTitle: string;
+  pieceIndex: number;
+  totalPieces: number;
+  text: string;
+}
+
+function pieceStartMarker(piece: AtomicPiece): string {
+  return `<<<OMNI_PIECE_START chapter="${piece.chapterIndex}" piece="${piece.pieceIndex}" total="${piece.totalPieces}">>>`;
+}
+
+function pieceEndMarker(piece: AtomicPiece): string {
+  return `<<<OMNI_PIECE_END chapter="${piece.chapterIndex}" piece="${piece.pieceIndex}" total="${piece.totalPieces}">>>`;
+}
+
+function renderBatch(units: AtomicPiece[], batchHasMultipleChapters: boolean): string {
+  const parts: string[] = [];
+  let currentChapter: number | null = null;
+
+  for (const unit of units) {
+    if (batchHasMultipleChapters && unit.chapterIndex !== currentChapter) {
+      if (currentChapter !== null) {
+        parts.push(`<<<OMNI_CHAPTER_END index="${currentChapter}">>>`);
+      }
+      parts.push(`<<<OMNI_CHAPTER_START index="${unit.chapterIndex}">>>`);
+      currentChapter = unit.chapterIndex;
+    }
+
+    parts.push(pieceStartMarker(unit));
+    parts.push(unit.text);
+    parts.push(pieceEndMarker(unit));
   }
 
-  return pieces;
+  if (batchHasMultipleChapters && currentChapter !== null) {
+    parts.push(`<<<OMNI_CHAPTER_END index="${currentChapter}">>>`);
+  }
+
+  return parts.join('\n');
 }
 
 /**
- * Creates optimized translation batches targeting MAX_BATCH_CHAR_BUDGET (7000 Chinese characters).
- * 
- * Rules:
- * 1. Keep chapter boundaries intact.
- * 2. Never split in the middle of a chapter unless the chapter exceeds MAX_BATCH_CHAR_BUDGET.
- * 3. Combine consecutive adjacent small chapters into a single batch up to 7000 chars.
- * 4. Never reorder, skip, or duplicate text.
+ * Creates quota-efficient translation batches:
+ *   - 2,500 Chinese characters is the atomic recovery unit.
+ *   - Adjacent atomic units are combined up to 7,000 source characters/request.
+ *   - Explicit piece markers make every atomic unit auditable and lossless.
+ *   - Chapter markers are preserved for multi-chapter batches.
+ *   - Source order is never changed.
  */
 export function createOptimizedBatches(
   chapters: ParsedChapter[],
   maxBudget: number = MAX_BATCH_CHAR_BUDGET
 ): TranslationBatch[] {
+  const atomicPieces: AtomicPiece[] = [];
+
+  for (const chapter of chapters) {
+    const pieces = splitLargeChapter(
+      chapter.text,
+      Math.min(ATOMIC_CHUNK_CHAR_BUDGET, maxBudget),
+      Math.min(ATOMIC_CHUNK_CHAR_BUDGET, maxBudget)
+    );
+    const totalPieces = pieces.length;
+    pieces.forEach((text, pieceIndex) => {
+      atomicPieces.push({
+        chapterIndex: chapter.index,
+        chapterTitle: chapter.title,
+        pieceIndex,
+        totalPieces,
+        text,
+      });
+    });
+  }
+
   const batches: TranslationBatch[] = [];
-  let currentBatchChapters: ParsedChapter[] = [];
-  let currentBatchLength = 0;
+  let current: AtomicPiece[] = [];
+  let currentLength = 0;
 
-  function flushBatch() {
-    if (currentBatchChapters.length === 0) return;
+  const flush = () => {
+    if (!current.length) return;
 
-    const chapterIndices = currentBatchChapters.map((c) => c.index);
-    const chapterTitles = currentBatchChapters.map((c) => c.title);
-    // Explicit control markers make multi-chapter batches lossless: the model
-    // must return the same markers in the same order, allowing deterministic
-    // reassembly instead of guessing chapter boundaries from translated text.
-    const originalText = currentBatchChapters.length > 1
-      ? currentBatchChapters.map((c) =>
-          `<<<OMNI_CHAPTER_START index=\"${c.index}\">>>\n${c.text}\n<<<OMNI_CHAPTER_END index=\"${c.index}\">>>`
-        ).join('\n\n')
-      : currentBatchChapters[0].text;
+    const chapterIndices: number[] = [];
+    const chapterTitles: string[] = [];
+    for (const piece of current) {
+      if (!chapterIndices.includes(piece.chapterIndex)) {
+        chapterIndices.push(piece.chapterIndex);
+        chapterTitles.push(piece.chapterTitle);
+      }
+    }
 
     batches.push({
       id: `b_${batches.length}`,
       batchIndex: batches.length,
       chapterIndices,
       chapterTitles,
-      originalText,
+      pieceIndex: current.length === 1 ? current[0].pieceIndex : undefined,
+      totalPieces: current.length === 1 ? current[0].totalPieces : undefined,
+      originalText: renderBatch(current, chapterIndices.length > 1),
     });
 
-    currentBatchChapters = [];
-    currentBatchLength = 0;
-  }
+    current = [];
+    currentLength = 0;
+  };
 
-  for (const chapter of chapters) {
-    const chLength = chapter.text.length;
+  for (const piece of atomicPieces) {
+    const pieceLength = piece.text.length;
 
-    // Case 1: Chapter itself is larger than maxBudget (e.g. 12,000 chars)
-    if (chLength > maxBudget) {
-      // First flush any accumulated chapters
-      flushBatch();
-
-      // Split this large chapter into sequential pieces
-      const pieces = splitLargeChapter(chapter.text, Math.round(maxBudget * 0.85), maxBudget);
-      for (let pIdx = 0; pIdx < pieces.length; pIdx++) {
-        batches.push({
-          id: `b_${batches.length}`,
-          batchIndex: batches.length,
-          chapterIndices: [chapter.index],
-          chapterTitles: [chapter.title],
-          pieceIndex: pIdx,
-          totalPieces: pieces.length,
-          originalText: pieces[pIdx],
-        });
-      }
+    // A single pathological unit is never dropped. It is already hard-split by
+    // splitLargeChapter, but retain this guard for future configuration changes.
+    if (pieceLength > maxBudget) {
+      flush();
+      batches.push({
+        id: `b_${batches.length}`,
+        batchIndex: batches.length,
+        chapterIndices: [piece.chapterIndex],
+        chapterTitles: [piece.chapterTitle],
+        pieceIndex: piece.pieceIndex,
+        totalPieces: piece.totalPieces,
+        originalText: renderBatch([piece], false),
+      });
       continue;
     }
 
-    // Case 2: Chapter fits in budget. Check if adding it exceeds maxBudget
-    if (currentBatchLength + chLength > maxBudget && currentBatchChapters.length > 0) {
-      flushBatch();
+    if (current.length && currentLength + pieceLength > maxBudget) {
+      flush();
     }
 
-    currentBatchChapters.push(chapter);
-    currentBatchLength += chLength;
+    current.push(piece);
+    currentLength += pieceLength;
   }
 
-  flushBatch();
+  flush();
   return batches;
+}
+
+function stripPieceMarkers(text: string): string {
+  return text.replace(/<<<OMNI_PIECE_(?:START|END)\s+chapter="\d+"\s+piece="\d+"\s+total="\d+">>>/g, '').trim();
 }
 
 /**
@@ -240,7 +309,7 @@ export function splitTranslatedBatch(
 
   if (chapterIndices.length === 0) return result;
   if (chapterIndices.length === 1) {
-    result.set(chapterIndices[0], translatedText.trim());
+    result.set(chapterIndices[0], stripPieceMarkers(translatedText));
     return result;
   }
 
@@ -258,7 +327,7 @@ export function splitTranslatedBatch(
         valid = false;
         break;
       }
-      result.set(chapterIndices[i], markerMatches[i][2].trim());
+      result.set(chapterIndices[i], stripPieceMarkers(markerMatches[i][2]));
     }
     if (valid) return result;
     result.clear();
@@ -299,7 +368,7 @@ export function splitTranslatedBatch(
     for (let i = 0; i < splitPoints.length; i++) {
       const current = splitPoints[i];
       const nextStart = i + 1 < splitPoints.length ? splitPoints[i + 1].startIdx : cleanTranslated.length;
-      const chContent = cleanTranslated.slice(current.startIdx, nextStart).trim();
+      const chContent = stripPieceMarkers(cleanTranslated.slice(current.startIdx, nextStart));
       result.set(current.chapterIndex, chContent);
     }
     return result;
@@ -313,12 +382,12 @@ export function splitTranslatedBatch(
     const chIdx = chapterIndices[i];
     if (i === chapterIndices.length - 1) {
       const remaining = paragraphs.slice(paraIdx).join('\n\n').trim();
-      result.set(chIdx, remaining);
+      result.set(chIdx, stripPieceMarkers(remaining));
     } else {
       const targetParaCount = Math.max(1, Math.round(paragraphs.length / chapterIndices.length));
       const chParas = paragraphs.slice(paraIdx, paraIdx + targetParaCount);
       paraIdx += chParas.length;
-      result.set(chIdx, chParas.join('\n\n').trim());
+      result.set(chIdx, stripPieceMarkers(chParas.join('\n\n')));
     }
   }
 
@@ -335,8 +404,8 @@ function escapeRegex(str: string): string {
 export function chunkChapter(
   chapterIndex: number,
   chapterText: string,
-  targetSize: number = 6000,
-  maxSize: number = MAX_BATCH_CHAR_BUDGET
+  targetSize: number = ATOMIC_CHUNK_CHAR_BUDGET,
+  maxSize: number = ATOMIC_CHUNK_CHAR_BUDGET
 ): ParsedChunk[] {
   const pieces = splitLargeChapter(chapterText, targetSize, maxSize);
   return pieces.map((p, idx) => ({

@@ -36,3 +36,15 @@ View your app in AI Studio: https://ai.studio/apps/bd65e405-08e6-480c-9ff5-402e9
 Normal novel translation is pinned to `gemini-3.8-flash`. If Gemini explicitly blocks a chunk for a content-policy/safety reason, OmniVicente permanently switches that chunk to the same no-key Google Translate web-service approach used by MegaTXT-Translator. Normal chunks are never sent to Google Translate, and a safety-blocked chunk is never retried against Gemini.
 
 The Google fallback does not require `GOOGLE_TRANSLATE_API_KEY` or a paid Google Cloud Translation account. It uses Google's public web translation endpoints and is therefore less stable than the official Cloud Translation API.
+
+## Quota-efficient Gemini batching
+
+The translator now uses a two-level source layout:
+
+- **2,500 Chinese-character atomic pieces**: the recovery/audit unit.
+- **7,000 Chinese-character Gemini batches**: adjacent atomic pieces are packed together into one Gemini request.
+- Explicit `OMNI_PIECE` markers are preserved through Gemini and the Google safety fallback and removed before final chapter export.
+- Multi-chapter batches retain exact `OMNI_CHAPTER` markers.
+- A batch never exceeds the 7,000-character source budget (marker overhead is additional protocol text).
+
+This reduces Gemini request count compared with sending every 2,500-character piece separately while retaining small, deterministic source boundaries.

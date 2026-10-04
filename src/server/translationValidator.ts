@@ -14,7 +14,7 @@ export interface TranslationValidationResult {
   englishLetters: number;
 }
 
-const MARKER_RE = /<<<OMNI_CHAPTER_(?:START|END)\s+index="\d+">>>/g;
+const MARKER_RE = /<<<OMNI_(?:CHAPTER_(?:START|END)\s+index="\d+"|PIECE_(?:START|END)\s+chapter="\d+"\s+piece="\d+"\s+total="\d+")>>>/g;
 
 function cleanForValidation(text: string): string {
   return text

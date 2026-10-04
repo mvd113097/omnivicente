@@ -136,7 +136,7 @@ function makeBatches(text: string): string[] {
 export async function translateWithGoogleFallback(sourceText: string): Promise<string> {
   if (!sourceText || !sourceText.trim()) return '';
 
-  const markerPattern = /<<<OMNI_CHAPTER_(?:START|END)\s+index="\d+">>>/g;
+  const markerPattern = /<<<OMNI_(?:CHAPTER_(?:START|END)\s+index="\d+"|PIECE_(?:START|END)\s+chapter="\d+"\s+piece="\d+"\s+total="\d+")>>>/g;
   const parts = sourceText.split(markerPattern);
   const markers = sourceText.match(markerPattern) ?? [];
 

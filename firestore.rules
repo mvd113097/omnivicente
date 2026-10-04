@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Translation jobs collection and all subcollections (chapters, chunks)
+    match /translation_jobs/{jobId} {
+      allow read, write: if true;
+
+      match /chapters/{chapterId} {
+        allow read, write: if true;
+      }
+
+      match /chunks/{chunkId} {
+        allow read, write: if true;
+      }
+
+      match /{subCollection=**} {
+        allow read, write: if true;
+      }
+    }
+
+    // Default deny for anything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
