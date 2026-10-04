@@ -1,0 +1,18 @@
+{
+  "id": "test_restart_1791118629212",
+  "filename": "restart.txt",
+  "totalChapters": 1,
+  "totalChunks": 2,
+  "completedChunks": 1,
+  "status": "translating",
+  "createdAt": 1791118629212,
+  "updatedAt": 1791118629216,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 2
+    }
+  ],
+  "error": null
+}

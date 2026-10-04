@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Chunk, Job, JobStatus, JobStatusResponse } from './types.js';
+import { Chunk, Job, JobStatus, JobStatusResponse, TelegramSettings } from './types.js';
 import { splitTranslatedBatch } from './textSplitter.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -8,6 +8,7 @@ const JOBS_DIR = path.join(DATA_DIR, 'jobs');
 const CHUNKS_DIR = path.join(DATA_DIR, 'chunks');
 const CONFIG_DIR = path.join(DATA_DIR, 'config');
 const KEYS_FILE = path.join(CONFIG_DIR, 'keys.json');
+const TELEGRAM_FILE = path.join(CONFIG_DIR, 'telegram.json');
 
 // Ensure base directories exist
 function ensureDirs() {
@@ -259,8 +260,8 @@ export class Store {
 
       await this.updateChunk(chunk);
 
-      // Update job progress
-      const chunks = await this.getChunks(jobId);
+      const cachedMap = this.chunksCache.get(jobId);
+      const chunks = cachedMap ? Array.from(cachedMap.values()) : await this.getChunks(jobId);
       const completedCount = chunks.filter((c) => c.status === 'completed').length;
       const isAllCompleted = completedCount === chunks.length;
 
@@ -426,13 +427,20 @@ export class Store {
     const completedCount = chunks.filter((c) => c.status === 'completed').length;
     const totalCount = job.totalChunks || chunks.length || 1;
 
-    // Count completed chapters
+    // Count completed chapters across all multi-chapter batch chunks
     const chapterChunksMap = new Map<number, Chunk[]>();
     for (const chunk of chunks) {
-      if (!chapterChunksMap.has(chunk.chapterIndex)) {
-        chapterChunksMap.set(chunk.chapterIndex, []);
+      const indices =
+        chunk.chapterIndices && chunk.chapterIndices.length > 0
+          ? chunk.chapterIndices
+          : [chunk.chapterIndex];
+
+      for (const chIdx of indices) {
+        if (!chapterChunksMap.has(chIdx)) {
+          chapterChunksMap.set(chIdx, []);
+        }
+        chapterChunksMap.get(chIdx)!.push(chunk);
       }
-      chapterChunksMap.get(chunk.chapterIndex)!.push(chunk);
     }
 
     let completedChaptersCount = 0;
@@ -496,18 +504,69 @@ export class Store {
    */
   static getKeys(): string[] {
     ensureDirs();
+
+    // 1. Check saved keys file first if populated (e.g. from UI settings)
     const stored = readJson<{ keys: string[] }>(KEYS_FILE);
-    const keys: string[] = stored?.keys || [];
-    if (keys.length > 0) {
-      return keys.slice(0, 5);
+    const savedKeys = (stored?.keys || []).filter(
+      (k) =>
+        k.trim().length > 0 &&
+        k !== 'MY_GEMINI_API_KEY' &&
+        !k.startsWith('test-key') &&
+        !k.startsWith('mock-key') &&
+        !k.startsWith('benchmark-key')
+    );
+    if (savedKeys.length > 0) {
+      return savedKeys.slice(0, 5);
     }
 
-    // Fallback to process.env if no keys are saved in settings
     const envKeys: string[] = [];
-    if (process.env.GEMINI_API_KEY) envKeys.push(process.env.GEMINI_API_KEY);
+
+    // 2. Check process.env.GEMINI_API_KEYS (comma or newline separated list of up to 5 keys)
+    if (process.env.GEMINI_API_KEYS) {
+      const parsed = process.env.GEMINI_API_KEYS.split(/[\n,;\s]+/)
+        .map((k) => k.trim())
+        .filter(
+          (k) =>
+            k.length > 0 &&
+            k !== 'MY_GEMINI_API_KEY' &&
+            !k.startsWith('test-key') &&
+            !k.startsWith('mock-key') &&
+            !k.startsWith('benchmark-key')
+        );
+      for (const k of parsed) {
+        if (!envKeys.includes(k)) envKeys.push(k);
+      }
+    }
+
+    // 3. Check process.env.GEMINI_API_KEY_1 through GEMINI_API_KEY_5
     for (let i = 1; i <= 5; i++) {
       const k = process.env[`GEMINI_API_KEY_${i}`];
-      if (k && !envKeys.includes(k)) envKeys.push(k);
+      if (
+        k &&
+        k.trim() &&
+        k.trim() !== 'MY_GEMINI_API_KEY' &&
+        !k.trim().startsWith('test-key') &&
+        !k.trim().startsWith('mock-key') &&
+        !k.trim().startsWith('benchmark-key') &&
+        !envKeys.includes(k.trim())
+      ) {
+        envKeys.push(k.trim());
+      }
+    }
+
+    // 4. Check standard process.env.GEMINI_API_KEY
+    if (
+      process.env.GEMINI_API_KEY &&
+      process.env.GEMINI_API_KEY.trim() &&
+      process.env.GEMINI_API_KEY.trim() !== 'MY_GEMINI_API_KEY' &&
+      !process.env.GEMINI_API_KEY.trim().startsWith('test-key') &&
+      !process.env.GEMINI_API_KEY.trim().startsWith('mock-key') &&
+      !process.env.GEMINI_API_KEY.trim().startsWith('benchmark-key')
+    ) {
+      const k = process.env.GEMINI_API_KEY.trim();
+      if (!envKeys.includes(k)) {
+        envKeys.push(k);
+      }
     }
 
     return envKeys.slice(0, 5);
@@ -517,8 +576,52 @@ export class Store {
     ensureDirs();
     const validKeys = keys
       .map((k) => k.trim())
-      .filter((k) => k.length > 0)
+      .filter(
+        (k) =>
+          k.length > 0 &&
+          k !== 'MY_GEMINI_API_KEY' &&
+          !k.startsWith('test-key') &&
+          !k.startsWith('mock-key') &&
+          !k.startsWith('benchmark-key')
+      )
       .slice(0, 5);
     atomicWriteJson(KEYS_FILE, { keys: validKeys });
+  }
+
+  static getTelegramSettings(): TelegramSettings {
+    ensureDirs();
+    const stored = readJson<TelegramSettings>(TELEGRAM_FILE);
+    if (stored) {
+      return {
+        botToken: stored.botToken || '',
+        chatIds: Array.isArray(stored.chatIds) ? stored.chatIds.slice(0, 2) : [],
+        notifyStart: stored.notifyStart !== false,
+        notifyProgress: stored.notifyProgress !== false,
+        notifyComplete: stored.notifyComplete !== false,
+      };
+    }
+
+    const envToken = process.env.TELEGRAM_BOT_TOKEN || '';
+    const envChatId = process.env.TELEGRAM_CHAT_ID || '';
+    const ids = envChatId ? envChatId.split(/[\s,;]+/).filter(Boolean) : [];
+
+    return {
+      botToken: envToken,
+      chatIds: ids.slice(0, 2),
+      notifyStart: true,
+      notifyProgress: true,
+      notifyComplete: true,
+    };
+  }
+
+  static saveTelegramSettings(settings: TelegramSettings): void {
+    ensureDirs();
+    atomicWriteJson(TELEGRAM_FILE, {
+      botToken: (settings.botToken || '').trim(),
+      chatIds: (settings.chatIds || []).map((id) => id.trim()).filter(Boolean).slice(0, 2),
+      notifyStart: Boolean(settings.notifyStart),
+      notifyProgress: Boolean(settings.notifyProgress),
+      notifyComplete: Boolean(settings.notifyComplete),
+    });
   }
 }

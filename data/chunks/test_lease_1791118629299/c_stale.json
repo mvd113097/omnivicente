@@ -1,0 +1,13 @@
+{
+  "id": "c_stale",
+  "jobId": "test_lease_1791118629299",
+  "chapterIndex": 1,
+  "chunkIndex": 0,
+  "originalText": "陈旧租约",
+  "translatedText": "",
+  "status": "pending",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791118629302
+}

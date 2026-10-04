@@ -1,0 +1,13 @@
+{
+  "id": "c_ch1",
+  "jobId": "test_neverskip_1791117471064",
+  "chapterIndex": 1,
+  "chunkIndex": 0,
+  "originalText": "第一章原文",
+  "translatedText": "Chapter 1 content.",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791117471064
+}

@@ -38,126 +38,155 @@ Strict rules:
 4. Do NOT output any translator notes (TL note), commentary, explanations, prefaces, or conclusions.
 5. Output ONLY the translated story text.`;
 
-export const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+// High-quota model cascade sequence
+export const MODEL_CASCADE = [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+];
 
-export async function translateTextWithGemini(
+export const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || MODEL_CASCADE[0];
+
+/**
+ * Executes a single API call to Gemini supporting all key formats (AIzaSy..., AQ...).
+ */
+async function callGeminiApiSingle(
   text: string,
   apiKey: string,
-  modelName: string = DEFAULT_GEMINI_MODEL
+  modelName: string
 ): Promise<TranslationResult> {
-  if (!text || text.trim().length === 0) {
-    return { text: '' };
-  }
-
-  // Handle mock/test keys
-  if (apiKey.startsWith('mock-key') || apiKey.startsWith('test-key')) {
-    // Simulated translation for testing without burning API quota
-    await new Promise((r) => setTimeout(r, 40));
-    return {
-      text: `[Translated EN] ${text}`,
-    };
-  }
-
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: modelName,
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: SYSTEM_INSTRUCTION }],
+      },
       contents: [
         {
           role: 'user',
           parts: [{ text: `Translate the following Chinese web novel excerpt to English:\n\n${text}` }],
         },
       ],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+      generationConfig: {
         temperature: 0.3,
         maxOutputTokens: 8192,
       },
-    });
+    }),
+  });
 
-    const candidate = response.candidates?.[0];
-    const finishReason = candidate?.finishReason;
-    const outputText = response.text?.trim() || '';
-
-    // Check for MAX_TOKENS truncation
-    if (finishReason === 'MAX_TOKENS') {
-      return {
-        text: outputText,
-        isTruncated: true,
-      };
-    }
-
-    if (!outputText && candidate?.finishReason === 'SAFETY') {
-      throw new GeminiSafetyError('Content blocked by safety filters');
-    }
-
-    if (!outputText) {
-      throw new Error('Gemini returned an empty translation response');
-    }
-
-    return { text: outputText, isTruncated: false };
-  } catch (error: any) {
-    const errMsg = error?.message || String(error);
-    const status = error?.status || error?.statusCode || 0;
-
-    // Detect 401/403 Authentication / Invalid Key errors
-    if (
-      status === 401 ||
-      status === 403 ||
-      errMsg.includes('401') ||
-      errMsg.includes('403') ||
-      errMsg.includes('UNAUTHENTICATED') ||
-      errMsg.includes('PERMISSION_DENIED') ||
-      errMsg.includes('API_KEY_INVALID') ||
-      errMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED') ||
-      errMsg.includes('API key not valid') ||
-      errMsg.includes('invalid authentication credentials')
-    ) {
-      throw new GeminiAuthError(
-        'Invalid Gemini API Key format. Google AI Studio API keys start with "AIzaSy..." from https://aistudio.google.com/apikey (not session tokens starting with "AQ").'
-      );
-    }
-
-    // Detect 429 Rate Limit / Quota Exceeded
-    if (
-      status === 429 ||
-      status === 503 ||
-      errMsg.includes('429') ||
-      errMsg.includes('503') ||
-      errMsg.includes('RESOURCE_EXHAUSTED') ||
-      errMsg.includes('UNAVAILABLE') ||
-      errMsg.includes('high demand') ||
-      errMsg.includes('quota') ||
-      errMsg.includes('rate limit')
-    ) {
-      // Parse retry delay in seconds if available
-      let retryDelay = 30;
-      const retryDelayMatch = errMsg.match(/retryDelay["']?\s*:\s*["']?(\d+)s?["']?/i);
-      if (retryDelayMatch) {
-        retryDelay = Math.max(5, parseInt(retryDelayMatch[1], 10));
-      } else {
-        const hoursMatch = errMsg.match(/retry in\s+(\d+)h/i);
-        const minsMatch = errMsg.match(/(\d+)m/i);
-        const secsMatch = errMsg.match(/(\d+(?:\.\d+)?)s/i);
-        if (hoursMatch || minsMatch) {
-          const hours = hoursMatch ? parseInt(hoursMatch[1], 10) : 0;
-          const mins = minsMatch ? parseInt(minsMatch[1], 10) : 0;
-          const secs = secsMatch ? parseFloat(secsMatch[1]) : 0;
-          retryDelay = Math.max(30, Math.ceil(hours * 3600 + mins * 60 + secs));
-        } else if (secsMatch) {
-          retryDelay = Math.max(5, Math.ceil(parseFloat(secsMatch[1])));
-        }
-      }
-      throw new GeminiRateLimitError(errMsg, retryDelay);
-    }
-
-    // Safety block
-    if (errMsg.includes('SAFETY') || errMsg.includes('blocked')) {
-      throw new GeminiSafetyError(errMsg);
-    }
-
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errMsg = data?.error?.message || response.statusText || 'API request failed';
+    const error: any = new Error(errMsg);
+    error.status = response.status;
+    error.data = data;
     throw error;
   }
+
+  const candidate = data?.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  const parts = candidate?.content?.parts || [];
+  const outputText = parts.map((p: any) => p.text || '').join('').trim();
+
+  if (finishReason === 'MAX_TOKENS') {
+    return { text: outputText, isTruncated: true };
+  }
+  if (!outputText && candidate?.finishReason === 'SAFETY') {
+    throw new GeminiSafetyError('Content blocked by safety filters');
+  }
+  if (!outputText) {
+    throw new Error('Gemini returned an empty translation response');
+  }
+
+  return { text: outputText, isTruncated: false };
+}
+
+/**
+ * Translates Chinese text with multi-model fallback cascade and dual auth support.
+ */
+export async function translateTextWithGemini(
+  text: string,
+  apiKey: string,
+  preferredModel: string = DEFAULT_GEMINI_MODEL
+): Promise<TranslationResult> {
+  if (!text || text.trim().length === 0) {
+    return { text: '' };
+  }
+
+  // Handle mock/test keys ONLY during automated test suite execution
+  if (
+    process.env.NODE_ENV === 'test' &&
+    (apiKey.startsWith('mock-key') || apiKey.startsWith('test-key') || apiKey.startsWith('benchmark-key'))
+  ) {
+    await new Promise((r) => setTimeout(r, 40));
+    return { text: `[Translated EN] ${text}` };
+  }
+
+  // Build model sequence starting with preferredModel, then remaining cascade
+  const modelsToTry = [preferredModel, ...MODEL_CASCADE.filter((m) => m !== preferredModel)];
+  let lastError: any = null;
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const currentModel = modelsToTry[i];
+    try {
+      return await callGeminiApiSingle(text, apiKey, currentModel);
+    } catch (error: any) {
+      lastError = error;
+      const errMsg = error?.message || String(error);
+      const status = error?.status || error?.statusCode || 0;
+
+      // 429 Quota Exceeded / Rate Limit -> Try next fallback model if available
+      const isRateLimit =
+        status === 429 ||
+        status === 503 ||
+        errMsg.includes('429') ||
+        errMsg.includes('503') ||
+        errMsg.includes('RESOURCE_EXHAUSTED') ||
+        errMsg.includes('UNAVAILABLE') ||
+        errMsg.includes('quota') ||
+        errMsg.includes('rate limit');
+
+      if (isRateLimit) {
+        console.warn(`[Gemini Cascade] Model ${currentModel} rate limited/quota exceeded. Trying next model...`);
+        if (i < modelsToTry.length - 1) {
+          continue; // Try next model in sequence
+        }
+      }
+
+      // If Auth error
+      const isAuthError =
+        status === 401 ||
+        status === 403 ||
+        errMsg.includes('401') ||
+        errMsg.includes('403') ||
+        errMsg.includes('API_KEY_INVALID') ||
+        errMsg.includes('invalid authentication credentials');
+
+      if (isAuthError) {
+        throw new GeminiAuthError(`Invalid Gemini API Key or Token: ${errMsg}`);
+      }
+
+      if (errMsg.includes('SAFETY') || errMsg.includes('blocked')) {
+        throw new GeminiSafetyError(errMsg);
+      }
+
+      if (isRateLimit) {
+        throw new GeminiRateLimitError(errMsg, 15);
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('All model attempts failed');
 }
 
 /**
@@ -176,16 +205,13 @@ export async function translateChunkSafely(
     return result.text;
   }
 
-  // MAX_TOKENS detected: split source into 2 sub-chunks at sentence or paragraph boundary
   if (depth >= 3) {
-    // Safety depth limit to prevent infinite recursion
     return result.text;
   }
 
   const mid = Math.floor(sourceText.length / 2);
   let splitIdx = sourceText.lastIndexOf('\n', mid);
   if (splitIdx === -1 || splitIdx < mid * 0.5) {
-    // Try sentence punctuation
     const puncts = ['。', '！', '？', '!', '?', '.'];
     for (const p of puncts) {
       const idx = sourceText.lastIndexOf(p, mid);

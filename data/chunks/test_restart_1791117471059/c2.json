@@ -1,0 +1,14 @@
+{
+  "id": "c2",
+  "jobId": "test_restart_1791117471059",
+  "chapterIndex": 1,
+  "chunkIndex": 1,
+  "originalText": "第二句",
+  "translatedText": "[Translated EN] 第二句",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791117471104,
+  "error": null
+}

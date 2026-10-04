@@ -76,7 +76,8 @@ export class JobManager {
       const job = await Store.getJob(jobId);
       if (job) {
         sendTelegramNotification(
-          `📖 <b>Translation Started</b>\n<b>Novel:</b> ${job.filename}\n<b>Chapters:</b> ${job.totalChapters}\n<b>Chunks:</b> ${job.totalChunks}`
+          `📖 <b>Translation Started</b>\n<b>Novel:</b> ${job.filename}\n<b>Chapters:</b> ${job.totalChapters}\n<b>Chunks:</b> ${job.totalChunks}`,
+          'start'
         );
       }
     }

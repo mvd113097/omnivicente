@@ -57,3 +57,11 @@ export interface JobStatusResponse {
 export interface KeyConfig {
   keys: string[];
 }
+
+export interface TelegramSettings {
+  botToken: string;
+  chatIds: string[];
+  notifyStart: boolean;
+  notifyProgress: boolean;
+  notifyComplete: boolean;
+}

@@ -1,0 +1,22 @@
+{
+  "id": "test_epub_active_1791117471065",
+  "filename": "active_novel.txt",
+  "totalChapters": 2,
+  "totalChunks": 2,
+  "completedChunks": 1,
+  "status": "translating",
+  "createdAt": 1791117471065,
+  "updatedAt": 1791117471065,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "Chapter 2",
+      "chunkCount": 1
+    }
+  ]
+}

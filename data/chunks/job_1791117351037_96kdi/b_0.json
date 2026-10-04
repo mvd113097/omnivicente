@@ -1,0 +1,23 @@
+{
+  "id": "b_0",
+  "jobId": "job_1791117351037_96kdi",
+  "chapterIndex": 1,
+  "chapterIndices": [
+    1,
+    2,
+    3
+  ],
+  "chapterTitles": [
+    "第一章 破晓之剑",
+    "第二章 藏经阁",
+    "第三章 踏浪而行"
+  ],
+  "chunkIndex": 0,
+  "originalText": "第一章 破晓之剑\n清晨微光破开云雾，山巅之上，白衣少年缓缓睁开双眼。\n\n\n\n第二章 藏经阁\n楼阁重重，经卷万千。少年指尖划过斑驳竹简，寻找失传的古法。\n\n\n\n第三章 踏浪而行\n大江东去，浪淘尽。少年负手立于舟头，迎向未知的修真界。\n",
+  "translatedText": "",
+  "status": "pending",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791117351037
+}

@@ -1,6 +1,7 @@
 import { GeminiAuthError, GeminiRateLimitError, translateChunkSafely } from './geminiTranslator.js';
 import { Store } from './store.js';
 import { Chunk, Job } from './types.js';
+import { sendTelegramNotification } from './telegram.js';
 
 interface KeyState {
   key: string;
@@ -13,10 +14,12 @@ export class TranslationScheduler {
   private activeJobs = new Set<string>();
   private keyStates: KeyState[] = [];
   private leaseCheckTimer: NodeJS.Timeout | null = null;
+  private progressTimer: NodeJS.Timeout | null = null;
 
   private constructor() {
     this.refreshKeys();
     this.startPeriodicRecovery();
+    this.startPeriodicProgress();
   }
 
   static getInstance(): TranslationScheduler {
@@ -28,10 +31,16 @@ export class TranslationScheduler {
 
   refreshKeys(): void {
     const configuredKeys = Store.getKeys();
-    // Maintain busy states for existing keys, add new ones
+    const now = Date.now();
     this.keyStates = configuredKeys.map((key) => {
       const existing = this.keyStates.find((k) => k.key === key);
-      return existing || { key, isBusy: false, cooldownUntil: 0 };
+      if (existing) {
+        if (existing.cooldownUntil <= now) {
+          existing.cooldownUntil = 0;
+        }
+        return existing;
+      }
+      return { key, isBusy: false, cooldownUntil: 0 };
     });
   }
 
@@ -44,6 +53,22 @@ export class TranslationScheduler {
         this.dispatch(jobId);
       }
     }, 30000);
+  }
+
+  // Periodic 5-minute progress notification via Telegram
+  private startPeriodicProgress(): void {
+    if (this.progressTimer) clearInterval(this.progressTimer);
+    this.progressTimer = setInterval(async () => {
+      for (const jobId of this.activeJobs) {
+        const status = await Store.getJobStatus(jobId);
+        if (status && status.status === 'translating') {
+          sendTelegramNotification(
+            `📊 <b>Translation Progress Update (5 min)</b>\n<b>Novel:</b> ${status.filename}\n<b>Progress:</b> ${status.completedChunks}/${status.totalChunks} Chunks (${status.percentage}%)\n<b>Completed Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>Translated Words:</b> ${status.translatedWords.toLocaleString()} words`,
+            'progress'
+          );
+        }
+      }
+    }, 5 * 60 * 1000);
   }
 
   /**
@@ -67,12 +92,13 @@ export class TranslationScheduler {
     const job = await Store.getJob(jobId);
     if (!job) return false;
 
+    const configuredKeys = Store.getKeys();
     this.refreshKeys();
-    if (this.keyStates.length === 0) {
+    if (configuredKeys.length === 0) {
       console.warn(`[Omni Scheduler] Cannot start job ${jobId}: No Gemini API keys configured`);
       await Store.updateJob(jobId, {
         status: 'paused',
-        error: 'No Gemini API keys configured. Please add at least 1 key.',
+        error: 'No Gemini API keys configured. Please configure keys or secrets.',
       });
       return false;
     }
@@ -162,6 +188,8 @@ export class TranslationScheduler {
     for (const keyState of availableKeys) {
       if (!this.activeJobs.has(jobId)) break;
 
+      // Mark key busy synchronously to prevent racing/double dispatch
+      keyState.isBusy = true;
       const workerId = `worker_${keyState.key.slice(-6)}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
       // Execute dispatch step asynchronously
@@ -169,18 +197,21 @@ export class TranslationScheduler {
         // Atomically claim chunk with 5-minute lease
         const chunk = await Store.claimPendingChunk(jobId, workerId, 300000);
         if (!chunk) {
-          // No pending chunks available. Check if job is fully completed.
+          keyState.isBusy = false; // Release key since no pending work was available
+          // Check if job is fully completed
           const status = await Store.getJobStatus(jobId);
           if (status && status.completedChunks === status.totalChunks) {
             this.activeJobs.delete(jobId);
             await Store.updateJob(jobId, { status: 'completed' });
             console.log(`[Omni Scheduler] Job ${jobId} FULLY COMPLETED!`);
+            sendTelegramNotification(
+              `🎉 <b>Translation Completed 100%!</b>\n<b>Novel:</b> ${status.filename}\n<b>Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>Translated Words:</b> ${status.translatedWords.toLocaleString()} words`,
+              'complete'
+            );
           }
           return;
         }
 
-        // Mark key busy
-        keyState.isBusy = true;
         this.processChunk(jobId, chunk, keyState, workerId);
       })();
     }

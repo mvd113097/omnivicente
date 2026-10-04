@@ -14,7 +14,14 @@ export interface TestResult {
 }
 
 export async function runAllAutomatedTests(): Promise<{ total: number; passed: number; results: TestResult[] }> {
+  const fs = await import('fs');
+  const path = await import('path');
+  const keysFile = path.resolve('data/config/keys.json');
+  const backupKeys = fs.existsSync(keysFile) ? fs.readFileSync(keysFile, 'utf-8') : null;
+
   const results: TestResult[] = [];
+
+  try {
 
   const runTest = async (name: string, fn: () => Promise<void>) => {
     const start = Date.now();
@@ -732,6 +739,13 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
     passed: passedCount,
     results,
   };
+  } finally {
+    if (backupKeys !== null) {
+      fs.writeFileSync(keysFile, backupKeys);
+    } else if (fs.existsSync(keysFile)) {
+      fs.unlinkSync(keysFile);
+    }
+  }
 }
 
 // Allow direct CLI execution: `tsx src/server/tests.ts`

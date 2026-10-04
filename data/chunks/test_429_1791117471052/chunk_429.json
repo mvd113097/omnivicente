@@ -1,0 +1,14 @@
+{
+  "id": "chunk_429",
+  "jobId": "test_429_1791117471052",
+  "chapterIndex": 1,
+  "chunkIndex": 0,
+  "originalText": "测试429限制",
+  "translatedText": "[Translated EN] 测试429限制",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 1,
+  "updatedAt": 1791117471189,
+  "error": null
+}

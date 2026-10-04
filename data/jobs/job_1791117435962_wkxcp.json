@@ -1,0 +1,28 @@
+{
+  "id": "job_1791117435962_wkxcp",
+  "filename": "novel_fresh_lifecycle.txt",
+  "totalChapters": 3,
+  "totalChunks": 1,
+  "completedChunks": 0,
+  "status": "paused",
+  "createdAt": 1791117435962,
+  "updatedAt": 1791117435980,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "第一章 破晓之剑",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "第二章 藏经阁",
+      "chunkCount": 1
+    },
+    {
+      "index": 3,
+      "title": "第三章 踏浪而行",
+      "chunkCount": 1
+    }
+  ],
+  "error": "All configured Gemini API keys have reached quota limit or are invalid. Please check your API keys in \"Configure Keys\" (Standard keys start with \"AIzaSy...\")."
+}

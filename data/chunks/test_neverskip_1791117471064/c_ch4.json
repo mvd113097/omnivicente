@@ -1,0 +1,14 @@
+{
+  "id": "c_ch4",
+  "jobId": "test_neverskip_1791117471064",
+  "chapterIndex": 4,
+  "chunkIndex": 0,
+  "originalText": "第四章原文（进行中）",
+  "translatedText": "Chapter 4 content.",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791117471065,
+  "error": null
+}

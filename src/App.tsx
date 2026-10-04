@@ -5,7 +5,10 @@ import {
   Play,
   Pause,
   Download,
-  Key,
+  Settings,
+  Send,
+  Bell,
+  MessageSquare,
   CheckCircle,
   AlertCircle,
   RefreshCw,
@@ -47,11 +50,21 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [keysModalOpen, setKeysModalOpen] = useState(false);
-  const [keys, setKeys] = useState<string[]>(['', '', '', '', '']);
-  const [keysCount, setKeysCount] = useState<number>(0);
-  const [bulkKeysText, setBulkKeysText] = useState<string>('');
-  const [keysInputMode, setKeysInputMode] = useState<'bulk' | 'individual'>('bulk');
+
+  // Settings & Telegram State
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatIds, setTelegramChatIds] = useState('');
+  const [notifyStart, setNotifyStart] = useState(true);
+  const [notifyProgress, setNotifyProgress] = useState(true);
+  const [notifyComplete, setNotifyComplete] = useState(true);
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+  const [telegramTestStatus, setTelegramTestStatus] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState<'epub' | 'txt' | null>(null);
   const [testsModalOpen, setTestsModalOpen] = useState(false);
@@ -61,22 +74,103 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastEtagRef = useRef<string | null>(null);
 
-  // Fetch configured keys count
-  const fetchKeys = async () => {
+  // Fetch configured Telegram notification settings
+  const fetchTelegramSettings = async () => {
     try {
-      const res = await fetch('/api/keys');
+      const res = await fetch('/api/telegram');
       if (res.ok) {
         const data = await res.json();
-        setKeysCount(data.count || 0);
+        setTelegramToken(data.botToken || '');
+        setTelegramChatIds(Array.isArray(data.chatIds) ? data.chatIds.join(', ') : '');
+        setNotifyStart(data.notifyStart !== false);
+        setNotifyProgress(data.notifyProgress !== false);
+        setNotifyComplete(data.notifyComplete !== false);
       }
     } catch (err) {
-      console.error('Failed to fetch keys:', err);
+      console.error('Failed to fetch Telegram settings:', err);
     }
   };
 
   useEffect(() => {
-    fetchKeys();
+    fetchTelegramSettings();
   }, []);
+
+  const handleSaveTelegram = async () => {
+    setIsSavingTelegram(true);
+    setTelegramTestStatus(null);
+    try {
+      const chatIdsArr = telegramChatIds
+        .split(/[\s,;]+/)
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 2);
+
+      const res = await fetch('/api/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botToken: telegramToken.trim(),
+          chatIds: chatIdsArr,
+          notifyStart,
+          notifyProgress,
+          notifyComplete,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to save Telegram settings');
+      }
+
+      setTelegramTestStatus({
+        success: true,
+        message: 'Telegram settings saved successfully!',
+      });
+      setTimeout(() => {
+        setSettingsModalOpen(false);
+      }, 1200);
+    } catch (err: any) {
+      setTelegramTestStatus({
+        success: false,
+        message: err.message || 'Failed to save settings',
+      });
+    } finally {
+      setIsSavingTelegram(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setIsTestingTelegram(true);
+    setTelegramTestStatus(null);
+    try {
+      const chatIdsArr = telegramChatIds
+        .split(/[\s,;]+/)
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 2);
+
+      const res = await fetch('/api/telegram/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botToken: telegramToken.trim(),
+          chatIds: chatIdsArr,
+        }),
+      });
+
+      const data = await res.json();
+      setTelegramTestStatus({
+        success: data.success,
+        message: data.message || (data.success ? 'Test message sent!' : 'Test message failed.'),
+      });
+    } catch (err: any) {
+      setTelegramTestStatus({
+        success: false,
+        message: err.message || 'Failed to send test message',
+      });
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
 
   // Lightweight status polling with ETag mobile-data saving
   const fetchStatus = useCallback(async (jobId: string) => {
@@ -198,7 +292,7 @@ export default function App() {
     } catch (err: any) {
       setErrorMessage(err.message);
       if (err.message.includes('Gemini API keys')) {
-        setKeysModalOpen(true);
+        setSettingsModalOpen(true);
       }
     } finally {
       setIsActionLoading(false);
@@ -290,28 +384,7 @@ export default function App() {
     }
   };
 
-  // Save Keys
-  const handleSaveKeys = async () => {
-    setIsActionLoading(true);
-    try {
-      const valid = keys.filter((k) => k.trim().length > 0);
-      const res = await fetch('/api/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys: valid }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setKeysCount(data.count);
-        setKeysModalOpen(false);
-        setErrorMessage(null);
-      }
-    } catch (err: any) {
-      setErrorMessage('Failed to save API keys');
-    } finally {
-      setIsActionLoading(false);
-    }
-  };
+
 
   // Run Test Suite
   const handleRunTests = async () => {
@@ -365,11 +438,15 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setKeysModalOpen(true)}
-              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+              onClick={() => {
+                setSettingsModalOpen(true);
+                fetchTelegramSettings();
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Telegram Notifications & Settings"
             >
-              <Key className="w-3.5 h-3.5 text-amber-600" />
-              <span>{keysCount > 0 ? `${keysCount}/5 Keys Active` : 'Configure Keys'}</span>
+              <Settings className="w-3.5 h-3.5 text-blue-600" />
+              <span>Telegram Settings</span>
             </button>
           </div>
         </div>
@@ -432,17 +509,7 @@ export default function App() {
                 <p className="text-xs text-slate-400 mt-1">Supports large novels with 1,000,000+ Chinese characters</p>
               </div>
 
-              {keysCount === 0 && (
-                <div className="mt-6 p-3 bg-amber-50 border border-amber-200 rounded-lg text-left text-xs text-amber-800 flex items-center justify-between">
-                  <span>No Gemini API keys configured yet.</span>
-                  <button
-                    onClick={() => setKeysModalOpen(true)}
-                    className="font-semibold underline text-amber-900 ml-2"
-                  >
-                    Add Keys
-                  </button>
-                </div>
-              )}
+
             </div>
           </div>
         )}
@@ -747,178 +814,147 @@ export default function App() {
         </div>
       )}
 
-      {/* Keys Configuration Modal */}
-      {keysModalOpen && (
+      {/* Telegram Settings Modal */}
+      {settingsModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2">
-                <Key className="w-4 h-4 text-amber-600" />
-                <h3 className="text-sm font-bold text-slate-900">Gemini API Keys Pool (Up to 5)</h3>
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                  <Settings className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Telegram Notification Settings</h3>
+                  <p className="text-[11px] text-slate-500">Configure bot notifications for translation updates</p>
+                </div>
               </div>
               <button
-                onClick={() => setKeysModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-medium"
+                onClick={() => setSettingsModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-medium cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="mt-3 mb-4 p-2.5 bg-blue-50/70 border border-blue-100 rounded-xl text-xs text-blue-900 leading-relaxed">
-              <span className="font-semibold">Supported Keys:</span> Paste up to 5 Gemini API keys (keys starting with <strong>AQ...</strong> or <strong>AIzaSy...</strong> from{' '}
-              <a
-                href="https://aistudio.google.com/apikey"
-                target="_blank"
-                rel="noreferrer"
-                className="underline font-bold text-blue-800 hover:text-blue-900"
-              >
-                aistudio.google.com/apikey
-              </a>
-              ). Omni Translator runs all 5 keys simultaneously in background with automatic 429 rate-limit failover.
-            </div>
+            <div className="space-y-4 text-xs">
+              {/* Telegram Bot Token Input */}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Telegram Bot Token
+                </label>
+                <input
+                  type="password"
+                  placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ..."
+                  value={telegramToken}
+                  onChange={(e) => setTelegramToken(e.target.value)}
+                  className="w-full p-2.5 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:border-blue-500 bg-slate-50/50 font-mono"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block leading-tight">
+                  Get your bot token from <strong>@BotFather</strong> on Telegram.
+                </span>
+              </div>
 
-            {/* Mode Switcher */}
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl mb-4 text-xs font-medium">
-              <button
-                type="button"
-                onClick={() => setKeysInputMode('bulk')}
-                className={`flex-1 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                  keysInputMode === 'bulk'
-                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Paste All 5 at Once
-              </button>
-              <button
-                type="button"
-                onClick={() => setKeysInputMode('individual')}
-                className={`flex-1 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                  keysInputMode === 'individual'
-                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Individual Key Slots ({keys.filter((k) => k.trim().length > 0).length}/5)
-              </button>
-            </div>
+              {/* Telegram Chat IDs Input */}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Telegram Chat IDs (Up to 2 IDs separated by comma)
+                </label>
+                <input
+                  type="text"
+                  placeholder="123456789, 987654321"
+                  value={telegramChatIds}
+                  onChange={(e) => setTelegramChatIds(e.target.value)}
+                  className="w-full p-2.5 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:border-blue-500 bg-slate-50/50 font-mono"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block leading-tight">
+                  Separate 2 user/group IDs with a comma (e.g. <code>123456789, 987654321</code>).
+                </span>
+              </div>
 
-            {/* Bulk Paste View */}
-            {keysInputMode === 'bulk' && (
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-semibold text-slate-700">
-                      Paste all keys (1 per line or separated by commas/spaces):
-                    </label>
-                    <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      {keys.filter((k) => k.trim().length > 0).length} / 5 keys recognized
-                    </span>
-                  </div>
-                  <textarea
-                    rows={6}
-                    placeholder={`AIzaSy...key1\nAIzaSy...key2\nAIzaSy...key3\nAIzaSy...key4\nAIzaSy...key5`}
-                    value={bulkKeysText}
-                    onChange={(e) => {
-                      const text = e.target.value;
-                      setBulkKeysText(text);
-                      // Split by newlines, commas, semicolons, or spaces
-                      const extracted = text
-                        .split(/[\r\n,;\s]+/)
-                        .map((k) => k.trim())
-                        .filter((k) => k.length > 0)
-                        .slice(0, 5);
+              {/* Toggles Section */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                <span className="font-semibold text-slate-800 block text-[11px] mb-1">
+                  Notification Triggers
+                </span>
 
-                      const updated = ['', '', '', '', ''];
-                      extracted.forEach((k, i) => {
-                        if (i < 5) updated[i] = k;
-                      });
-                      setKeys(updated);
-                    }}
-                    className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:outline-hidden focus:border-blue-500 bg-slate-50/50 leading-relaxed"
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5">
+                    <Play className="w-3.5 h-3.5 text-blue-600" />
+                    Notify when translation starts
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notifyStart}
+                    onChange={(e) => setNotifyStart(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                   />
+                </label>
+
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                    Status update every 5 minutes
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notifyProgress}
+                    onChange={(e) => setNotifyProgress(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                    Notify when translation completes
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notifyComplete}
+                    onChange={(e) => setNotifyComplete(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                  />
+                </label>
+              </div>
+
+              {/* Status Banner */}
+              {telegramTestStatus && (
+                <div
+                  className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+                    telegramTestStatus.success
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  {telegramTestStatus.success ? (
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <span className="leading-snug">{telegramTestStatus.message}</span>
                 </div>
+              )}
 
-                {/* Parsed Keys Preview */}
-                {keys.some((k) => k.trim().length > 0) && (
-                  <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                    <span className="text-[11px] font-semibold text-slate-500 block mb-1">
-                      Detected Keys Preview:
-                    </span>
-                    {keys
-                      .map((k, idx) => ({ key: k, idx }))
-                      .filter((item) => item.key.trim().length > 0)
-                      .map((item) => (
-                        <div
-                          key={item.idx}
-                          className="flex items-center justify-between text-[11px] font-mono text-slate-700 bg-white px-2.5 py-1 rounded border border-slate-100"
-                        >
-                          <span className="font-semibold text-blue-700">Key {item.idx + 1}:</span>
-                          <span>
-                            {item.key.length <= 10
-                              ? item.key
-                              : `${item.key.slice(0, 5)}••••••••${item.key.slice(-4)}`}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Individual Slots View */}
-            {keysInputMode === 'individual' && (
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
-                {[0, 1, 2, 3, 4].map((idx) => (
-                  <div key={idx}>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      API Key {idx + 1} {idx === 0 && <span className="text-slate-400 font-normal">(Primary Pool)</span>}
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="AQ... or AIzaSy..."
-                      value={keys[idx] || ''}
-                      onChange={(e) => {
-                        const updated = [...keys];
-                        updated[idx] = e.target.value;
-                        setKeys(updated);
-                        // Also update bulk text
-                        setBulkKeysText(updated.filter((k) => k.trim().length > 0).join('\n'));
-                      }}
-                      className="w-full px-3 py-1.5 text-xs font-mono border border-slate-200 rounded-lg focus:outline-hidden focus:border-blue-500 bg-slate-50/50"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-5 flex items-center justify-between pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => {
-                  setKeys(['', '', '', '', '']);
-                  setBulkKeysText('');
-                }}
-                className="text-xs text-rose-600 hover:text-rose-800 font-medium"
-              >
-                Clear All
-              </button>
-
-              <div className="flex items-center gap-2">
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setKeysModalOpen(false)}
-                  className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium cursor-pointer"
+                  onClick={handleTestTelegram}
+                  disabled={isTestingTelegram || !telegramToken}
+                  className="px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
                 >
-                  Cancel
+                  <Send className="w-3.5 h-3.5 text-blue-600" />
+                  {isTestingTelegram ? 'Sending...' : 'Send Test Message'}
                 </button>
+
                 <button
                   type="button"
-                  onClick={handleSaveKeys}
-                  disabled={isActionLoading || keys.every((k) => !k.trim())}
-                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                  onClick={handleSaveTelegram}
+                  disabled={isSavingTelegram}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
                 >
-                  Save {keys.filter((k) => k.trim().length > 0).length} Keys
+                  <Check className="w-3.5 h-3.5" />
+                  {isSavingTelegram ? 'Saving...' : 'Save Settings'}
                 </button>
               </div>
             </div>

@@ -1,0 +1,18 @@
+{
+  "id": "test_pr_1791117471055",
+  "filename": "pause_resume.txt",
+  "totalChapters": 1,
+  "totalChunks": 1,
+  "completedChunks": 0,
+  "status": "paused",
+  "createdAt": 1791117471055,
+  "updatedAt": 1791117471058,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 1
+    }
+  ],
+  "error": null
+}

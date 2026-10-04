@@ -1,0 +1,13 @@
+{
+  "id": "c2",
+  "jobId": "test_partial_txt_1791118629400",
+  "chapterIndex": 2,
+  "chunkIndex": 0,
+  "originalText": "待翻译",
+  "translatedText": "",
+  "status": "pending",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791118629400
+}

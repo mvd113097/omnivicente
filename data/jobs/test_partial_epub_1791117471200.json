@@ -1,0 +1,27 @@
+{
+  "id": "test_partial_epub_1791117471200",
+  "filename": "partial.txt",
+  "totalChapters": 3,
+  "totalChunks": 3,
+  "completedChunks": 2,
+  "status": "translating",
+  "createdAt": 1791117471200,
+  "updatedAt": 1791117471200,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "Chapter 2",
+      "chunkCount": 1
+    },
+    {
+      "index": 3,
+      "title": "Chapter 3",
+      "chunkCount": 1
+    }
+  ]
+}

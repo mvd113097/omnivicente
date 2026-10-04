@@ -1,0 +1,18 @@
+{
+  "id": "test_429_1791117471052",
+  "filename": "429_test.txt",
+  "totalChapters": 1,
+  "totalChunks": 1,
+  "completedChunks": 1,
+  "status": "completed",
+  "createdAt": 1791117471052,
+  "updatedAt": 1791117471195,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 1
+    }
+  ],
+  "error": null
+}

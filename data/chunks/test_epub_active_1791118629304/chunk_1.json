@@ -1,0 +1,13 @@
+{
+  "id": "chunk_1",
+  "jobId": "test_epub_active_1791118629304",
+  "chapterIndex": 1,
+  "chunkIndex": 0,
+  "originalText": "第一章内容",
+  "translatedText": "Chapter 1 translated text.",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791118629304
+}

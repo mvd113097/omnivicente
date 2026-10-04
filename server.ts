@@ -193,6 +193,8 @@ app.get('/api/jobs/:id/export/txt', async (req, res) => {
   }
 });
 
+import { sendTelegramTest } from './src/server/telegram.js';
+
 // 9. Get Configured Keys (Masked)
 app.get('/api/keys', (req, res) => {
   const keys = Store.getKeys();
@@ -216,6 +218,49 @@ app.post('/api/keys', (req, res) => {
   Store.saveKeys(validKeys);
   TranslationScheduler.getInstance().refreshKeys();
   res.json({ success: true, count: validKeys.length });
+});
+
+// 11. Get Telegram Notification Settings
+app.get('/api/telegram', (req, res) => {
+  const settings = Store.getTelegramSettings();
+  res.json(settings);
+});
+
+// 12. Save Telegram Notification Settings
+app.post('/api/telegram', (req, res) => {
+  const { botToken, chatIds, notifyStart, notifyProgress, notifyComplete } = req.body;
+  const ids = Array.isArray(chatIds)
+    ? chatIds
+    : typeof chatIds === 'string'
+    ? chatIds.split(/[\s,;]+/).filter(Boolean)
+    : [];
+
+  Store.saveTelegramSettings({
+    botToken: botToken || '',
+    chatIds: ids.slice(0, 2),
+    notifyStart: notifyStart !== false,
+    notifyProgress: notifyProgress !== false,
+    notifyComplete: notifyComplete !== false,
+  });
+
+  res.json({ success: true, settings: Store.getTelegramSettings() });
+});
+
+// 13. Test Telegram Notification Connection
+app.post('/api/telegram/test', async (req, res) => {
+  try {
+    const { botToken, chatIds } = req.body;
+    const ids = Array.isArray(chatIds)
+      ? chatIds
+      : typeof chatIds === 'string'
+      ? chatIds.split(/[\s,;]+/).filter(Boolean)
+      : [];
+
+    const result = await sendTelegramTest(botToken || '', ids);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'Test failed' });
+  }
 });
 
 // 11. Run Automated Test Suite

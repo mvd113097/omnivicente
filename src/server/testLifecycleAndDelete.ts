@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
+import { Store } from './store.js';
+import { TranslationScheduler } from './scheduler.js';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -13,12 +15,17 @@ async function runLifecycleAndDeleteTest() {
   console.log('🧪 TESTING END-TO-END LIFECYCLE & DELETE NOVEL BUTTONS');
   console.log('================================================================\n');
 
-  // Configure test keys
-  await fetch(`${API_BASE}/keys`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keys: ['test-key-1', 'test-key-2', 'test-key-3', 'test-key-4', 'test-key-5'] }),
-  });
+  const keysFile = path.resolve('data/config/keys.json');
+  const backupKeys = fs.existsSync(keysFile) ? fs.readFileSync(keysFile, 'utf-8') : null;
+
+  try {
+    // Configure test keys for test run over HTTP
+    const keysRes = await fetch(`${API_BASE}/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: ['test-key-1', 'test-key-2', 'test-key-3', 'test-key-4', 'test-key-5'] }),
+    });
+    if (!keysRes.ok) throw new Error('Failed to set test keys via API');
 
   // STEP 1: Test Cancel & Delete of an active job
   console.log('--- TEST 1: Cancel & Delete While Translating ---');
@@ -227,7 +234,14 @@ async function runLifecycleAndDeleteTest() {
   console.log('🎉 ALL LIFECYCLE AND DELETE BUTTON TESTS PASSED 100%!');
   console.log('================================================================\n');
 
-  return { success: true };
+    return { success: true };
+  } finally {
+    if (backupKeys !== null) {
+      fs.writeFileSync(keysFile, backupKeys);
+    } else if (fs.existsSync(keysFile)) {
+      fs.unlinkSync(keysFile);
+    }
+  }
 }
 
 runLifecycleAndDeleteTest()
