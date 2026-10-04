@@ -24,7 +24,11 @@ export interface Chunk {
   id: string;
   jobId: string;
   chapterIndex: number;
+  chapterIndices?: number[];
+  chapterTitles?: string[];
   chunkIndex: number;
+  pieceIndex?: number;
+  totalPieces?: number;
   originalText: string;
   translatedText: string;
   status: ChunkStatus;

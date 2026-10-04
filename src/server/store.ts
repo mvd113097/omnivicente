@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Chunk, Job, JobStatus, JobStatusResponse } from './types.js';
+import { splitTranslatedBatch } from './textSplitter.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const JOBS_DIR = path.join(DATA_DIR, 'jobs');
@@ -341,13 +342,20 @@ export class Store {
 
     const chunks = await this.getChunks(jobId);
 
-    // Group chunks by chapter index
+    // Map each chapter index to all chunks that contain that chapter
     const chapterChunksMap = new Map<number, Chunk[]>();
     for (const chunk of chunks) {
-      if (!chapterChunksMap.has(chunk.chapterIndex)) {
-        chapterChunksMap.set(chunk.chapterIndex, []);
+      const indices =
+        chunk.chapterIndices && chunk.chapterIndices.length > 0
+          ? chunk.chapterIndices
+          : [chunk.chapterIndex];
+
+      for (const chIdx of indices) {
+        if (!chapterChunksMap.has(chIdx)) {
+          chapterChunksMap.set(chIdx, []);
+        }
+        chapterChunksMap.get(chIdx)!.push(chunk);
       }
-      chapterChunksMap.get(chunk.chapterIndex)!.push(chunk);
     }
 
     // Sort chapters by index ascending
@@ -357,7 +365,7 @@ export class Store {
     for (const ch of sortedChapters) {
       const chChunks = chapterChunksMap.get(ch.index) || [];
 
-      // If chapter has no chunks or any chunk is not completed -> STOP IMMEDIATELY!
+      // If chapter has no chunks or any chunk is not completed -> STOP IMMEDIATELY (Never-Skip rule)!
       if (chChunks.length === 0) {
         break;
       }
@@ -368,9 +376,33 @@ export class Store {
         break;
       }
 
-      // Sort chapter's chunks by chunkIndex
-      chChunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
-      const translatedText = chChunks.map((c) => c.translatedText).join('\n\n');
+      // Sort chapter's chunks by pieceIndex or chunkIndex
+      chChunks.sort((a, b) => (a.pieceIndex ?? a.chunkIndex) - (b.pieceIndex ?? b.chunkIndex));
+
+      // Extract translated text for this chapter
+      const chapterPieces: string[] = [];
+      for (const chunk of chChunks) {
+        const indices =
+          chunk.chapterIndices && chunk.chapterIndices.length > 0
+            ? chunk.chapterIndices
+            : [chunk.chapterIndex];
+
+        if (indices.length === 1) {
+          chapterPieces.push(chunk.translatedText);
+        } else {
+          // Multiple chapters in this batch -> extract content for this chapter
+          const splitMap = splitTranslatedBatch(
+            chunk.originalText,
+            chunk.translatedText,
+            indices,
+            chunk.chapterTitles || []
+          );
+          const chContent = splitMap.get(ch.index) || chunk.translatedText;
+          chapterPieces.push(chContent);
+        }
+      }
+
+      const translatedText = chapterPieces.join('\n\n').trim();
 
       exportableChapters.push({
         index: ch.index,
@@ -466,8 +498,11 @@ export class Store {
     ensureDirs();
     const stored = readJson<{ keys: string[] }>(KEYS_FILE);
     const keys: string[] = stored?.keys || [];
+    if (keys.length > 0) {
+      return keys.slice(0, 5);
+    }
 
-    // Also check process.env for GEMINI_API_KEY and GEMINI_API_KEY_1..5
+    // Fallback to process.env if no keys are saved in settings
     const envKeys: string[] = [];
     if (process.env.GEMINI_API_KEY) envKeys.push(process.env.GEMINI_API_KEY);
     for (let i = 1; i <= 5; i++) {
@@ -475,19 +510,7 @@ export class Store {
       if (k && !envKeys.includes(k)) envKeys.push(k);
     }
 
-    const realStored = keys.filter((k) => !k.startsWith('mock-key') && !k.startsWith('test-key'));
-    const combined = [...realStored];
-    for (const ek of envKeys) {
-      if (!combined.includes(ek)) {
-        combined.push(ek);
-      }
-    }
-
-    if (combined.length > 0) {
-      return combined.slice(0, 5);
-    }
-
-    return keys.slice(0, 5);
+    return envKeys.slice(0, 5);
   }
 
   static saveKeys(keys: string[]): void {

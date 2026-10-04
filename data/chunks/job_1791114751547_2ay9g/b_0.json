@@ -1,0 +1,20 @@
+{
+  "id": "b_0",
+  "jobId": "job_1791114751547_2ay9g",
+  "chapterIndex": 1,
+  "chapterIndices": [
+    1
+  ],
+  "chapterTitles": [
+    "Prologue / Introduction"
+  ],
+  "chunkIndex": 0,
+  "originalText": "　　《穿越之宅在荒野平原过日子》作者：慕容离白\n　　文案：陈启的人生就像他的名字一样普通，没想到某一天会突然遇到穿越这种事，还是穿越到了危险重重的兽人世界，不会狩猎，不会兽化，连体力都是个渣渣的他要如何在这危险的兽人世界中生存？\n　　外面太危险？没关系，那就建房子，找食物，打造一个舒适的家在兽人部落里宅下去吧。\n　　没有部落？没关系，我们自己建一个。\n　　这就是一个普通人努力过好每一天，并且努力将自己的生活变得更美好的故事。\n　　此文又叫【穿越之宅在兽人部落过日子】\n　　提示：1.本文慢热，偏种田，节奏相对比较缓慢，大概会是个长文。2.主攻，1V1，温馨无虐种田，HE，【温柔忠犬兽人受x穿越平凡宅男攻】。3.主角就是个普通人，没有什么金手指，受宠攻，当然攻也宠受。4.里面大多数的设定都是扯淡，除非出现前后矛盾的情况，否则请不要用过于科学的眼光去看待它。\n\n　　内容标签： 情有独钟 异世大陆 穿越时空 种田文\n　　搜索关键字：主角：陈启，阿泽 ┃ 配角：卡洛，阿克，阿彰，其他配角 ┃ 其它：兽人，种田，慢热，主攻\n\n",
+  "translatedText": "",
+  "status": "translating",
+  "claimedBy": "worker_oWxJDQ_1791114950830_lpnz",
+  "leaseExpiresAt": 1791115250830,
+  "retries": 1089,
+  "updatedAt": 1791114950830,
+  "error": "{\"error\":{\"code\":404,\"message\":\"This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements. We recommend you to use the Interactions API (https://ai.google.dev/gemini-api/docs/get-started).\",\"status\":\"NOT_FOUND\"}}"
+}

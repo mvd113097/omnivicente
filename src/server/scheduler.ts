@@ -1,4 +1,4 @@
-import { GeminiRateLimitError, translateChunkSafely } from './geminiTranslator.js';
+import { GeminiAuthError, GeminiRateLimitError, translateChunkSafely } from './geminiTranslator.js';
 import { Store } from './store.js';
 import { Chunk, Job } from './types.js';
 
@@ -135,12 +135,24 @@ export class TranslationScheduler {
     );
 
     if (availableKeys.length === 0) {
-      // Check if all keys are in cooldown
+      // Check if all keys are in cooldown / invalid
       const busyCount = this.keyStates.filter((k) => k.isBusy).length;
       if (busyCount === 0 && this.keyStates.length > 0) {
-        // All keys are in 429 cooldown: schedule retry at earliest expiration
         const minCooldown = Math.min(...this.keyStates.map((k) => k.cooldownUntil));
         const waitMs = Math.max(1000, minCooldown - now);
+
+        if (waitMs > 120000) {
+          // Prolonged quota or auth issue (e.g. 12 hours) -> Pause job with clear instruction
+          console.warn(`[Omni Scheduler] All keys are exhausted or invalid. Pausing job ${jobId}.`);
+          this.activeJobs.delete(jobId);
+          Store.updateJob(jobId, {
+            status: 'paused',
+            error: 'All configured Gemini API keys have reached quota limit or are invalid. Please check your API keys in "Configure Keys" (Standard keys start with "AIzaSy...").',
+          });
+          return;
+        }
+
+        // Transient rate limit: schedule retry at earliest expiration
         setTimeout(() => this.dispatch(jobId), waitMs);
       }
       return;
@@ -192,7 +204,15 @@ export class TranslationScheduler {
     } catch (err: any) {
       console.error(`[Omni Scheduler] Error translating chunk ${chunk.id}:`, err);
 
-      if (err instanceof GeminiRateLimitError) {
+      if (err instanceof GeminiAuthError) {
+        // Invalid Key format (e.g. 401 unauthenticated / unsupported access token)
+        // Disable this key for 24 hours so it won't be retried
+        keyState.cooldownUntil = Date.now() + 86400000;
+        console.warn(
+          `[Omni Scheduler] Key ${keyState.key.slice(0, 6)}... failed authentication. Disabling key.`
+        );
+        await Store.releaseChunk(jobId, chunk.id, err.message);
+      } else if (err instanceof GeminiRateLimitError) {
         // 429 Failover:
         // 1. Put this key into cooldown
         const cooldownMs = (err.retryAfterSeconds || 30) * 1000;

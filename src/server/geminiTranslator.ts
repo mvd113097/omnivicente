@@ -14,6 +14,13 @@ export class GeminiRateLimitError extends Error {
   }
 }
 
+export class GeminiAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeminiAuthError';
+  }
+}
+
 export class GeminiSafetyError extends Error {
   constructor(message: string) {
     super(message);
@@ -31,10 +38,12 @@ Strict rules:
 4. Do NOT output any translator notes (TL note), commentary, explanations, prefaces, or conclusions.
 5. Output ONLY the translated story text.`;
 
+export const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+
 export async function translateTextWithGemini(
   text: string,
   apiKey: string,
-  modelName: string = 'gemini-3.8-flash'
+  modelName: string = DEFAULT_GEMINI_MODEL
 ): Promise<TranslationResult> {
   if (!text || text.trim().length === 0) {
     return { text: '' };
@@ -62,6 +71,7 @@ export async function translateTextWithGemini(
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         temperature: 0.3,
+        maxOutputTokens: 8192,
       },
     });
 
@@ -90,7 +100,25 @@ export async function translateTextWithGemini(
     const errMsg = error?.message || String(error);
     const status = error?.status || error?.statusCode || 0;
 
-    // Detect 429 Rate Limit
+    // Detect 401/403 Authentication / Invalid Key errors
+    if (
+      status === 401 ||
+      status === 403 ||
+      errMsg.includes('401') ||
+      errMsg.includes('403') ||
+      errMsg.includes('UNAUTHENTICATED') ||
+      errMsg.includes('PERMISSION_DENIED') ||
+      errMsg.includes('API_KEY_INVALID') ||
+      errMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED') ||
+      errMsg.includes('API key not valid') ||
+      errMsg.includes('invalid authentication credentials')
+    ) {
+      throw new GeminiAuthError(
+        'Invalid Gemini API Key format. Google AI Studio API keys start with "AIzaSy..." from https://aistudio.google.com/apikey (not session tokens starting with "AQ").'
+      );
+    }
+
+    // Detect 429 Rate Limit / Quota Exceeded
     if (
       status === 429 ||
       status === 503 ||
@@ -102,11 +130,23 @@ export async function translateTextWithGemini(
       errMsg.includes('quota') ||
       errMsg.includes('rate limit')
     ) {
-      // Parse retry delay if available
-      let retryDelay = 20;
-      const match = errMsg.match(/retry in ([0-9.]+)/i) || errMsg.match(/retry after ([0-9]+)/i);
-      if (match) {
-        retryDelay = Math.max(5, Math.ceil(parseFloat(match[1])));
+      // Parse retry delay in seconds if available
+      let retryDelay = 30;
+      const retryDelayMatch = errMsg.match(/retryDelay["']?\s*:\s*["']?(\d+)s?["']?/i);
+      if (retryDelayMatch) {
+        retryDelay = Math.max(5, parseInt(retryDelayMatch[1], 10));
+      } else {
+        const hoursMatch = errMsg.match(/retry in\s+(\d+)h/i);
+        const minsMatch = errMsg.match(/(\d+)m/i);
+        const secsMatch = errMsg.match(/(\d+(?:\.\d+)?)s/i);
+        if (hoursMatch || minsMatch) {
+          const hours = hoursMatch ? parseInt(hoursMatch[1], 10) : 0;
+          const mins = minsMatch ? parseInt(minsMatch[1], 10) : 0;
+          const secs = secsMatch ? parseFloat(secsMatch[1]) : 0;
+          retryDelay = Math.max(30, Math.ceil(hours * 3600 + mins * 60 + secs));
+        } else if (secsMatch) {
+          retryDelay = Math.max(5, Math.ceil(parseFloat(secsMatch[1])));
+        }
       }
       throw new GeminiRateLimitError(errMsg, retryDelay);
     }

@@ -1,4 +1,4 @@
-import { chunkChapter, detectChapters } from './textSplitter.js';
+import { createOptimizedBatches, detectChapters, MAX_BATCH_CHAR_BUDGET } from './textSplitter.js';
 import { Store } from './store.js';
 import { TranslationScheduler } from './scheduler.js';
 import { sendTelegramNotification } from './telegram.js';
@@ -16,43 +16,41 @@ export class JobManager {
     // 1. Detect chapters server-side
     const parsedChapters = detectChapters(fullText);
 
-    // 2. Split each chapter into chunks
-    const allChunks: Chunk[] = [];
-    const chapterInfos: Job['chapters'] = [];
+    // 2. Create optimized translation batches around MAX_BATCH_CHAR_BUDGET (7000 chars)
+    const batches = createOptimizedBatches(parsedChapters, MAX_BATCH_CHAR_BUDGET);
 
-    let totalChunkCount = 0;
-    for (const ch of parsedChapters) {
-      const chunks = chunkChapter(ch.index, ch.text);
-      chapterInfos.push({
+    const chapterInfos: Job['chapters'] = parsedChapters.map((ch) => {
+      const containingBatches = batches.filter((b) => b.chapterIndices.includes(ch.index));
+      return {
         index: ch.index,
         title: ch.title,
-        chunkCount: chunks.length,
-      });
+        chunkCount: Math.max(1, containingBatches.length),
+      };
+    });
 
-      for (const c of chunks) {
-        const chunkId = `c_${ch.index}_${c.chunkIndex}`;
-        allChunks.push({
-          id: chunkId,
-          jobId,
-          chapterIndex: ch.index,
-          chunkIndex: c.chunkIndex,
-          originalText: c.text,
-          translatedText: '',
-          status: 'pending',
-          claimedBy: null,
-          leaseExpiresAt: null,
-          retries: 0,
-          updatedAt: now,
-        });
-        totalChunkCount++;
-      }
-    }
+    const allChunks: Chunk[] = batches.map((b) => ({
+      id: b.id,
+      jobId,
+      chapterIndex: b.chapterIndices[0],
+      chapterIndices: b.chapterIndices,
+      chapterTitles: b.chapterTitles,
+      chunkIndex: b.batchIndex,
+      pieceIndex: b.pieceIndex,
+      totalPieces: b.totalPieces,
+      originalText: b.originalText,
+      translatedText: '',
+      status: 'pending',
+      claimedBy: null,
+      leaseExpiresAt: null,
+      retries: 0,
+      updatedAt: now,
+    }));
 
     const job: Job = {
       id: jobId,
       filename,
       totalChapters: parsedChapters.length,
-      totalChunks: totalChunkCount,
+      totalChunks: allChunks.length,
       completedChunks: 0,
       status: 'pending',
       createdAt: now,
@@ -65,7 +63,7 @@ export class JobManager {
     await Store.saveChunks(jobId, allChunks);
 
     console.log(
-      `[Omni JobManager] Created job ${jobId} for "${filename}": ${parsedChapters.length} chapters, ${totalChunkCount} chunks`
+      `[Omni JobManager] Created job ${jobId} for "${filename}": ${parsedChapters.length} chapters, ${allChunks.length} chunks`
     );
 
     return job;

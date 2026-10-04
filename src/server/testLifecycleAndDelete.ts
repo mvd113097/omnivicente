@@ -13,6 +13,13 @@ async function runLifecycleAndDeleteTest() {
   console.log('🧪 TESTING END-TO-END LIFECYCLE & DELETE NOVEL BUTTONS');
   console.log('================================================================\n');
 
+  // Configure test keys
+  await fetch(`${API_BASE}/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keys: ['test-key-1', 'test-key-2', 'test-key-3', 'test-key-4', 'test-key-5'] }),
+  });
+
   // STEP 1: Test Cancel & Delete of an active job
   console.log('--- TEST 1: Cancel & Delete While Translating ---');
 
@@ -139,8 +146,12 @@ async function runLifecycleAndDeleteTest() {
 
   // Test Download Current EPUB & TXT while running
   console.log('5. Testing "Download Current EPUB" button while running...');
-  // Wait brief moment for chapter 1 to complete
-  await sleep(150);
+  // Wait for at least 1 contiguous chapter to be exportable
+  for (let i = 0; i < 30; i++) {
+    const s = await (await fetch(`${API_BASE}/jobs/${job2Id}/status`)).json();
+    if (s.exportableChapters >= 1) break;
+    await sleep(100);
+  }
 
   const curEpubRes = await fetch(`${API_BASE}/jobs/${job2Id}/export/epub`);
   if (!curEpubRes.ok) throw new Error(`Current EPUB download failed: ${curEpubRes.status}`);

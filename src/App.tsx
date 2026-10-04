@@ -13,7 +13,8 @@ import {
   Check,
   ChevronRight,
   ShieldCheck,
-  BookOpen
+  BookOpen,
+  Trash2
 } from 'lucide-react';
 
 interface JobStatus {
@@ -473,7 +474,7 @@ export default function App() {
                   <span
                     className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
                       jobStatus.status === 'translating'
-                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : jobStatus.status === 'completed'
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : jobStatus.status === 'paused'
@@ -482,35 +483,38 @@ export default function App() {
                     }`}
                   >
                     {jobStatus.status === 'translating' && (
-                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
                     )}
-                    {jobStatus.status === 'completed' && <CheckCircle className="w-3.5 h-3.5" />}
-                    {jobStatus.status === 'paused' && <Pause className="w-3.5 h-3.5" />}
-                    {jobStatus.status.charAt(0).toUpperCase() + jobStatus.status.slice(1)}
+                    {jobStatus.status === 'completed' && <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />}
+                    {jobStatus.status === 'paused' && <Pause className="w-3.5 h-3.5 text-amber-600" />}
+                    {jobStatus.status === 'translating'
+                      ? 'Translating in Background (Safe to Close)'
+                      : jobStatus.status === 'completed'
+                      ? 'Completed (100%)'
+                      : jobStatus.status === 'paused'
+                      ? 'Paused'
+                      : 'Ready to Start'}
                   </span>
-
-                  <button
-                    type="button"
-                    onClick={() => setDeleteConfirmOpen(true)}
-                    className="text-xs text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-lg transition-colors font-medium cursor-pointer"
-                    title="Cancel and delete this novel"
-                  >
-                    Cancel Novel
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      localStorage.removeItem('omni_active_job_id');
-                      setActiveJobId(null);
-                      setJobStatus(null);
-                    }}
-                    className="text-xs text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition-colors font-medium cursor-pointer"
-                    title="Switch to another novel"
-                  >
-                    Translate Another
-                  </button>
                 </div>
               </div>
+
+              {/* Live Background Running Banner: Visible when translating */}
+              {jobStatus.status === 'translating' && (
+                <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-950 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="relative flex h-3 w-3 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-600"></span>
+                    </span>
+                    <div>
+                      <span className="font-bold">Translation Actively Running on Server</span>
+                      <span className="text-emerald-800 ml-1.5">
+                        — You can safely close your browser or lock your phone. The translation continues in the background.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Progress Bar & Tabular Numerals */}
               <div className="py-5">
@@ -606,9 +610,11 @@ export default function App() {
                   type="button"
                   onClick={() => setDeleteConfirmOpen(true)}
                   disabled={isActionLoading}
-                  className="px-3 py-1.5 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-colors font-medium cursor-pointer"
+                  className="px-3.5 py-2 text-xs text-rose-600 hover:text-rose-700 bg-rose-50/70 hover:bg-rose-100/70 border border-rose-200/80 rounded-xl transition-colors font-medium cursor-pointer flex items-center gap-1.5"
+                  title="Delete this novel and reset workspace"
                 >
-                  Cancel & Delete Novel
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  Delete Novel
                 </button>
               </div>
             </div>
@@ -714,10 +720,10 @@ export default function App() {
               <AlertCircle className="w-6 h-6" />
             </div>
             <h3 className="text-base font-bold text-slate-900 text-center mb-1">
-              Cancel & Delete Novel?
+              Delete Novel?
             </h3>
             <p className="text-xs text-slate-500 text-center mb-5 leading-relaxed">
-              This will stop active background translation, purge all translated chapters for this novel from the server, and return you to the upload screen.
+              This will stop background translation, remove this novel from the server, and clear your workspace so you can upload a new novel.
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -725,15 +731,16 @@ export default function App() {
                 onClick={() => setDeleteConfirmOpen(false)}
                 className="flex-1 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               >
-                Keep Translating
+                Cancel
               </button>
               <button
                 type="button"
                 onClick={executeCancelNovel}
                 disabled={isActionLoading}
-                className="flex-1 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
-                {isActionLoading ? 'Deleting...' : 'Yes, Delete'}
+                <Trash2 className="w-3.5 h-3.5" />
+                {isActionLoading ? 'Deleting...' : 'Delete Novel'}
               </button>
             </div>
           </div>
@@ -758,7 +765,16 @@ export default function App() {
             </div>
 
             <div className="mt-3 mb-4 p-2.5 bg-blue-50/70 border border-blue-100 rounded-xl text-xs text-blue-900 leading-relaxed">
-              <span className="font-semibold">Key Format Notice:</span> Keys starting with <strong>AQ</strong>, <strong>AIzaSy</strong>, or any Gemini project API key are fully supported. Omni Translator schedules up to 5 simultaneous requests (max 1 active per key) with automatic 429 rate-limit failover.
+              <span className="font-semibold">Supported Keys:</span> Paste up to 5 Gemini API keys (keys starting with <strong>AQ...</strong> or <strong>AIzaSy...</strong> from{' '}
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="underline font-bold text-blue-800 hover:text-blue-900"
+              >
+                aistudio.google.com/apikey
+              </a>
+              ). Omni Translator runs all 5 keys simultaneously in background with automatic 429 rate-limit failover.
             </div>
 
             {/* Mode Switcher */}
@@ -801,7 +817,7 @@ export default function App() {
                   </div>
                   <textarea
                     rows={6}
-                    placeholder={`AQ...key1\nAQ...key2\nAQ...key3\nAQ...key4\nAQ...key5`}
+                    placeholder={`AIzaSy...key1\nAIzaSy...key2\nAIzaSy...key3\nAIzaSy...key4\nAIzaSy...key5`}
                     value={bulkKeysText}
                     onChange={(e) => {
                       const text = e.target.value;
