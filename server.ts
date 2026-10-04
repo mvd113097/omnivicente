@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import { JobManager } from './src/server/jobManager.js';
 import { Store } from './src/server/store.js';
 import { TranslationScheduler } from './src/server/scheduler.js';
@@ -21,6 +22,42 @@ const upload = multer({
 app.use(express.json());
 
 // API Routes
+
+// 1A. Compressed TXT upload. The browser may gzip the source before transfer.
+// A hard decompressed-size limit prevents accidental oversized/zip-bomb input.
+app.post('/api/upload-compressed', express.raw({ type: 'application/octet-stream', limit: '55mb' }), async (req, res) => {
+  try {
+    const filename = decodeURIComponent(String(req.headers['x-omni-filename'] || 'novel.txt'));
+    if (!filename.toLowerCase().endsWith('.txt')) {
+      return res.status(400).json({ error: 'Only .txt files are supported.' });
+    }
+    const encoding = String(req.headers['x-omni-content-encoding'] || 'gzip').toLowerCase();
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
+    if (!body.length) return res.status(400).json({ error: 'Compressed upload body is empty.' });
+
+    let decoded: Buffer;
+    if (encoding === 'gzip') {
+      decoded = zlib.gunzipSync(body);
+    } else if (encoding === 'br' || encoding === 'brotli') {
+      decoded = zlib.brotliDecompressSync(body);
+    } else {
+      return res.status(400).json({ error: 'Unsupported compression format.' });
+    }
+    if (decoded.length > 50 * 1024 * 1024) {
+      return res.status(413).json({ error: 'Decompressed file exceeds the 50 MB limit.' });
+    }
+
+    let content = decoded.toString('utf-8');
+    if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+    if (!content.trim()) return res.status(400).json({ error: 'The uploaded file is empty.' });
+
+    const job = await JobManager.createJobFromText(filename, content);
+    res.json({ success: true, compressedUpload: true, originalBytes: decoded.length, compressedBytes: body.length, job });
+  } catch (err: any) {
+    console.error('Compressed upload error:', err);
+    res.status(400).json({ error: err.message || 'Failed to decompress/process file' });
+  }
+});
 
 // 1. Upload TXT Novel
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -122,7 +159,24 @@ app.get('/api/jobs/:id/status', async (req, res) => {
 
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'no-cache');
-    res.json(status);
+    res.setHeader('Vary', 'Accept-Encoding');
+
+    // Status payloads are tiny, but Brotli makes the first/reopened status
+    // response even smaller on clients that advertise br support. 304 remains
+    // body-free, so unchanged polling consumes essentially only HTTP headers.
+    const statusJson = Buffer.from(JSON.stringify(status), 'utf-8');
+    const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
+    if (acceptEncoding.includes('br') && statusJson.length > 256) {
+      const compressed = zlib.brotliCompressSync(statusJson, {
+        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 },
+      });
+      res.setHeader('Content-Encoding', 'br');
+      res.setHeader('Content-Length', compressed.length);
+      return res.end(compressed);
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Length', statusJson.length);
+    return res.end(statusJson);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -184,9 +238,30 @@ app.get('/api/jobs/:id/export/txt', async (req, res) => {
       .replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '_');
     const downloadName = `${safeTitle}_Ch1-${chapterCount}.txt`;
 
+    const plain = Buffer.from(text, 'utf-8');
+    const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
+    let compressed: Buffer;
+    let contentEncoding: 'br' | 'gzip';
+
+    // Prefer Brotli for TXT because it normally produces a smaller transfer than gzip.
+    // Fall back to gzip for clients without Brotli support. EPUB is already a ZIP and
+    // is therefore intentionally not wrapped in another compression layer.
+    if (acceptEncoding.includes('br')) {
+      compressed = zlib.brotliCompressSync(plain, {
+        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
+      });
+      contentEncoding = 'br';
+    } else {
+      compressed = zlib.gzipSync(plain, { level: 6 });
+      contentEncoding = 'gzip';
+    }
+
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Encoding', contentEncoding);
+    res.setHeader('Vary', 'Accept-Encoding');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
-    res.send(text);
+    res.setHeader('Content-Length', compressed.length);
+    res.send(compressed);
   } catch (err: any) {
     console.error('TXT Export error:', err);
     res.status(500).json({ error: err.message || 'Failed to export TXT' });
@@ -228,7 +303,7 @@ app.get('/api/telegram', (req, res) => {
 
 // 12. Save Telegram Notification Settings
 app.post('/api/telegram', (req, res) => {
-  const { botToken, chatIds, notifyStart, notifyProgress, notifyComplete } = req.body;
+  const { botToken, chatIds, notifyStart, notifyProgress, notifyComplete, notifyPause, notifyResume, notifyError, notifyWaiting } = req.body;
   const ids = Array.isArray(chatIds)
     ? chatIds
     : typeof chatIds === 'string'
@@ -241,6 +316,10 @@ app.post('/api/telegram', (req, res) => {
     notifyStart: notifyStart !== false,
     notifyProgress: notifyProgress !== false,
     notifyComplete: notifyComplete !== false,
+    notifyPause: notifyPause !== false,
+    notifyResume: notifyResume !== false,
+    notifyError: notifyError !== false,
+    notifyWaiting: notifyWaiting !== false,
   });
 
   res.json({ success: true, settings: Store.getTelegramSettings() });

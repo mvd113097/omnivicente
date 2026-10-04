@@ -5,6 +5,8 @@ import { generateContiguousEpub, generateContiguousTxt } from './epubGenerator.j
 import { translateChunkSafely } from './geminiTranslator.js';
 import { detectChapters, chunkChapter } from './textSplitter.js';
 import { Chunk, Job } from './types.js';
+import { validateTranslation, hasExpectedChapterMarkers } from './translationValidator.js';
+import { splitTranslatedBatch } from './textSplitter.js';
 
 export interface TestResult {
   name: string;
@@ -47,6 +49,21 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
 
   console.log('\n--- STARTING OMNI TRANSLATOR AUTOMATED TEST SUITE ---\n');
 
+  // Test 0: Translation quality gate / chapter marker integrity
+  await runTest('0. Translation quality validator', async () => {
+    const source = '第一段内容。\n第二段内容。';
+    const good = 'This is the first translated paragraph.\nThis is the second translated paragraph.';
+    const bad = '第一段内容。\n第二段内容。';
+    if (!validateTranslation(source, good).valid) throw new Error('Valid English translation was rejected');
+    if (validateTranslation(source, bad).valid) throw new Error('Source Chinese was accepted as a translation');
+    if (validateTranslation(source, 'Only one translated paragraph.').valid) throw new Error('Missing paragraph was accepted');
+
+    const translated = '<<<OMNI_CHAPTER_START index=\"1\">>>\nChapter One\n<<<OMNI_CHAPTER_END index=\"1\">>>\n<<<OMNI_CHAPTER_START index=\"2\">>>\nChapter Two\n<<<OMNI_CHAPTER_END index=\"2\">>>';
+    if (!hasExpectedChapterMarkers(translated, [1, 2])) throw new Error('Chapter markers were not recognized');
+    const split = splitTranslatedBatch('<<<OMNI_CHAPTER_START index=\"1\">>>\n第一章\n<<<OMNI_CHAPTER_END index=\"1\">>>\n<<<OMNI_CHAPTER_START index=\"2\">>>\n第二章\n<<<OMNI_CHAPTER_END index=\"2\">>>', translated, [1, 2], ['第1章', '第2章']);
+    if (split.get(1) !== 'Chapter One' || split.get(2) !== 'Chapter Two') throw new Error('Marker-based chapter reassembly failed');
+  });
+
   // Test 1: Five-key concurrency (max 5 simultaneous keys)
   await runTest('1. Five-key concurrency', async () => {
     Store.saveKeys(['mock-key-1', 'mock-key-2', 'mock-key-3', 'mock-key-4', 'mock-key-5']);
@@ -71,7 +88,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
     }
   });
 
-  // Test 3: 429 failover
+  // Test 3: 429 failover (429s do not consume the chunk retry budget)
   await runTest('3. 429 failover', async () => {
     // Create a mock chunk and verify releaseChunk resets status and increments retries
     const testJobId = `test_429_${Date.now()}`;
@@ -104,14 +121,41 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
     };
     await Store.saveChunks(testJobId, [chunk]);
 
-    // Simulate 429 release
-    await Store.releaseChunk(testJobId, chunkId, '429 Rate limited');
+    // Simulate 429 release. Rate limiting must NOT consume the chunk's finite
+    // translation retry budget because the source itself did not fail.
+    await Store.releaseChunk(testJobId, chunkId, '429 Rate limited', false);
     const updated = await Store.getChunk(testJobId, chunkId);
     if (!updated || updated.status !== 'pending' || updated.claimedBy !== null) {
       throw new Error('Chunk not released properly on 429');
     }
-    if (updated.retries !== 1) {
-      throw new Error(`Expected retries 1, got ${updated.retries}`);
+    if (updated.retries !== 0) {
+      throw new Error(`429 incorrectly consumed a retry; expected 0, got ${updated.retries}`);
+    }
+
+    // Repeated 429s must continue to leave the chunk pending instead of making
+    // it fail after 10 provider-capacity events.
+    for (let i = 0; i < 12; i++) {
+      const current = await Store.getChunk(testJobId, chunkId);
+      if (!current) throw new Error('429 test chunk disappeared');
+      current.status = 'translating';
+      current.claimedBy = `worker_${i}`;
+      current.leaseExpiresAt = Date.now() + 60000;
+      await Store.updateChunk(current);
+      await Store.releaseChunk(testJobId, chunkId, `429 Rate limited #${i + 1}`, false);
+    }
+    const afterRepeated429 = await Store.getChunk(testJobId, chunkId);
+    if (!afterRepeated429 || afterRepeated429.status !== 'pending') {
+      throw new Error('Repeated 429s incorrectly failed the chunk');
+    }
+    if (afterRepeated429.retries !== 0) {
+      throw new Error(`Repeated 429s consumed retries; got ${afterRepeated429.retries}`);
+    }
+
+    // A real provider/translation error still consumes the normal retry budget.
+    await Store.releaseChunk(testJobId, chunkId, 'temporary translation error');
+    const afterRealError = await Store.getChunk(testJobId, chunkId);
+    if (!afterRealError || afterRealError.retries !== 1 || afterRealError.status !== 'pending') {
+      throw new Error('Normal translation errors no longer consume retries correctly');
     }
   });
 
@@ -323,6 +367,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
       totalChapters: 6,
       totalChunks: 6,
       completedChunks: 5,
+      contiguousTranslatedWords: 30000,
       status: 'translating',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -446,6 +491,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
       totalChapters: 2,
       totalChunks: 2,
       completedChunks: 1,
+      contiguousTranslatedWords: 30000,
       status: 'translating', // ACTIVE TRANSLATION
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -513,6 +559,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
       totalChapters: 2,
       totalChunks: 2,
       completedChunks: 1,
+      contiguousTranslatedWords: 30000,
       status: 'translating',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -579,6 +626,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
       totalChapters: 3,
       totalChunks: 3,
       completedChunks: 2,
+      contiguousTranslatedWords: 30000,
       status: 'translating',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -650,6 +698,7 @@ export async function runAllAutomatedTests(): Promise<{ total: number; passed: n
       totalChapters: 2,
       totalChunks: 2,
       completedChunks: 1,
+      contiguousTranslatedWords: 30000,
       status: 'translating',
       createdAt: Date.now(),
       updatedAt: Date.now(),

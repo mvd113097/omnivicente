@@ -2,7 +2,7 @@ import { Store } from './store.js';
 
 export async function sendTelegramNotification(
   message: string,
-  event: 'start' | 'progress' | 'complete' = 'start'
+  event: 'start' | 'progress' | 'complete' | 'pause' | 'resume' | 'error' | 'waiting' = 'start'
 ): Promise<boolean> {
   const settings = Store.getTelegramSettings();
 
@@ -10,6 +10,10 @@ export async function sendTelegramNotification(
   if (event === 'start' && !settings.notifyStart) return false;
   if (event === 'progress' && !settings.notifyProgress) return false;
   if (event === 'complete' && !settings.notifyComplete) return false;
+  if (event === 'pause' && !settings.notifyPause) return false;
+  if (event === 'resume' && !settings.notifyResume) return false;
+  if (event === 'error' && !settings.notifyError) return false;
+  if (event === 'waiting' && !settings.notifyWaiting) return false;
 
   const token = settings.botToken;
   const chatIds = settings.chatIds || [];

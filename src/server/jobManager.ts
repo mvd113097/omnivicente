@@ -52,6 +52,8 @@ export class JobManager {
       totalChapters: parsedChapters.length,
       totalChunks: allChunks.length,
       completedChunks: 0,
+      translatedWords: 0,
+      contiguousTranslatedWords: 0,
       status: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -91,7 +93,8 @@ export class JobManager {
       const job = await Store.getJob(jobId);
       if (job) {
         sendTelegramNotification(
-          `⏸️ <b>Translation Paused</b>\n<b>Novel:</b> ${job.filename}\n<b>Progress:</b> ${job.completedChunks}/${job.totalChunks}`
+          `⏸️ <b>Translation Paused</b>\n<b>Novel:</b> ${job.filename}\n<b>Progress:</b> ${job.completedChunks}/${job.totalChunks} (${Math.floor((job.completedChunks / Math.max(1, job.totalChunks)) * 100)}%)\n<b>English Words:</b> ${(job.translatedWords || 0).toLocaleString()}`,
+          'pause'
         );
       }
     }
@@ -105,7 +108,8 @@ export class JobManager {
       const job = await Store.getJob(jobId);
       if (job) {
         sendTelegramNotification(
-          `▶️ <b>Translation Resumed</b>\n<b>Novel:</b> ${job.filename}\n<b>Progress:</b> ${job.completedChunks}/${job.totalChunks}`
+          `▶️ <b>Translation Resumed</b>\n<b>Novel:</b> ${job.filename}\n<b>Progress:</b> ${job.completedChunks}/${job.totalChunks} (${Math.floor((job.completedChunks / Math.max(1, job.totalChunks)) * 100)}%)\n<b>English Words:</b> ${(job.translatedWords || 0).toLocaleString()}`,
+          'resume'
         );
       }
     }

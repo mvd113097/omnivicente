@@ -1,12 +1,14 @@
-import { GeminiAuthError, GeminiRateLimitError, translateChunkSafely } from './geminiTranslator.js';
+import { GeminiAuthError, GeminiPermissionError, GeminiModelError, GeminiRequestError, GeminiRateLimitError, GeminiSafetyError, translateChunkSafely } from './geminiTranslator.js';
 import { Store } from './store.js';
 import { Chunk, Job } from './types.js';
 import { sendTelegramNotification } from './telegram.js';
+import { translateWithGoogleFallback } from './googleTranslate.js';
 
 interface KeyState {
   key: string;
   isBusy: boolean;
   cooldownUntil: number;
+  disabledReason?: string;
 }
 
 export class TranslationScheduler {
@@ -63,7 +65,7 @@ export class TranslationScheduler {
         const status = await Store.getJobStatus(jobId);
         if (status && status.status === 'translating') {
           sendTelegramNotification(
-            `📊 <b>Translation Progress Update (5 min)</b>\n<b>Novel:</b> ${status.filename}\n<b>Progress:</b> ${status.completedChunks}/${status.totalChunks} Chunks (${status.percentage}%)\n<b>Completed Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>Translated Words:</b> ${status.translatedWords.toLocaleString()} words`,
+            `📊 <b>Translation Progress Update (5 min)</b>\n<b>Novel:</b> ${status.filename}\n<b>Progress:</b> ${status.completedChunks}/${status.totalChunks} Chunks (${status.percentage}%)\n<b>Completed Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>English Words Translated:</b> ${status.translatedWords.toLocaleString()}\n<b>Contiguous Words Ready:</b> ${status.contiguousTranslatedWords.toLocaleString()}\n<b>Contiguous Chapters Ready:</b> ${status.exportableChapters}`,
             'progress'
           );
         }
@@ -130,6 +132,23 @@ export class TranslationScheduler {
    * Resumes a paused job.
    */
   async resumeJob(jobId: string): Promise<boolean> {
+    const job = await Store.getJob(jobId);
+    if (!job) return false;
+    // A user-initiated resume is an explicit request to retry previously
+    // failed chunks, but completed chunks remain untouched.
+    const chunks = await Store.getChunks(jobId);
+    for (const chunk of chunks) {
+      if (chunk.status === 'failed') {
+        chunk.status = 'pending';
+        chunk.retries = 0;
+        chunk.error = null;
+        chunk.validationError = null;
+        chunk.claimedBy = null;
+        chunk.leaseExpiresAt = null;
+        chunk.updatedAt = Date.now();
+        await Store.updateChunk(chunk);
+      }
+    }
     return this.startJob(jobId);
   }
 
@@ -152,33 +171,39 @@ export class TranslationScheduler {
       return; // Job is paused or not active
     }
 
-    this.refreshKeys();
+    // Key states are refreshed only when keys are configured/started.
+    // Re-reading keys.json on every dispatch would perform synchronous disk I/O
+    // between every Gemini batch and can throttle a five-key worker pool.
     const now = Date.now();
 
     // Check all keys
     const availableKeys = this.keyStates.filter(
-      (k) => !k.isBusy && k.cooldownUntil <= now
+      (k) => !k.isBusy && !k.disabledReason && k.cooldownUntil <= now
     );
 
     if (availableKeys.length === 0) {
-      // Check if all keys are in cooldown / invalid
       const busyCount = this.keyStates.filter((k) => k.isBusy).length;
       if (busyCount === 0 && this.keyStates.length > 0) {
-        const minCooldown = Math.min(...this.keyStates.map((k) => k.cooldownUntil));
-        const waitMs = Math.max(1000, minCooldown - now);
-
-        if (waitMs > 120000) {
-          // Prolonged quota or auth issue (e.g. 12 hours) -> Pause job with clear instruction
-          console.warn(`[Omni Scheduler] All keys are exhausted or invalid. Pausing job ${jobId}.`);
+        const activeStates = this.keyStates.filter((k) => !k.disabledReason);
+        const allPermanentlyUnavailable = activeStates.length === 0;
+        if (allPermanentlyUnavailable) {
+          const reasons = this.keyStates.map((k, i) => `Key ${i + 1}: ${k.disabledReason || 'unavailable'}`).join(' | ');
+          const waitingMessage = `All configured Gemini keys are currently unavailable. ${reasons}`;
+          console.warn(`[Omni Scheduler] ${waitingMessage}`);
           this.activeJobs.delete(jobId);
-          Store.updateJob(jobId, {
-            status: 'paused',
-            error: 'All configured Gemini API keys have reached quota limit or are invalid. Please check your API keys in "Configure Keys" (Standard keys start with "AIzaSy...").',
-          });
+          Store.updateJob(jobId, { status: 'paused', error: waitingMessage });
+          sendTelegramNotification(
+            `⏳ <b>Gemini Capacity Unavailable</b>\n<b>Job:</b> ${jobId}\n<b>Reason:</b> ${waitingMessage}`,
+            'waiting'
+          );
           return;
         }
 
-        // Transient rate limit: schedule retry at earliest expiration
+        const minCooldown = Math.min(...activeStates.map((k) => k.cooldownUntil));
+        const waitMs = Math.max(1000, minCooldown - now);
+        // Never turn a long transient cooldown into a generic "invalid key" message.
+        // Daily quota/permission/auth keys are marked disabled above; transient 429/503
+        // states remain active and are retried when their cooldown expires.
         setTimeout(() => this.dispatch(jobId), waitMs);
       }
       return;
@@ -201,13 +226,31 @@ export class TranslationScheduler {
           // Check if job is fully completed
           const status = await Store.getJobStatus(jobId);
           if (status && status.completedChunks === status.totalChunks) {
-            this.activeJobs.delete(jobId);
-            await Store.updateJob(jobId, { status: 'completed' });
-            console.log(`[Omni Scheduler] Job ${jobId} FULLY COMPLETED!`);
-            sendTelegramNotification(
-              `🎉 <b>Translation Completed 100%!</b>\n<b>Novel:</b> ${status.filename}\n<b>Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>Translated Words:</b> ${status.translatedWords.toLocaleString()} words`,
-              'complete'
-            );
+            // Several idle workers can observe the same completed job at nearly
+            // the same time. Only the first worker that still owns the active-job
+            // slot may finalize it and send the completion notification.
+            if (this.activeJobs.has(jobId)) {
+              this.activeJobs.delete(jobId);
+              await Store.updateJob(jobId, { status: 'completed', error: null });
+              console.log(`[Omni Scheduler] Job ${jobId} FULLY COMPLETED!`);
+              sendTelegramNotification(
+                `🎉 <b>Translation Completed 100%!</b>\n<b>Novel:</b> ${status.filename}\n<b>Chapters:</b> ${status.completedChapters}/${status.totalChapters}\n<b>Translated Words:</b> ${status.translatedWords.toLocaleString()} words`,
+                'complete'
+              );
+            }
+          } else {
+            const chunks = await Store.getChunks(jobId);
+            const failed = chunks.filter((c) => c.status === 'failed');
+            const pending = chunks.filter((c) => c.status === 'pending' || c.status === 'translating');
+            if (failed.length > 0 && pending.length === 0 && this.activeJobs.has(jobId)) {
+              this.activeJobs.delete(jobId);
+              const message = `Translation stopped: ${failed.length} chunk(s) failed validation or exhausted retries. No incomplete content was exported.`;
+              await Store.updateJob(jobId, { status: 'failed', error: message });
+              sendTelegramNotification(
+                `❌ <b>Translation Stopped</b>\n<b>Novel:</b> ${status?.filename || jobId}\n<b>Failed Chunks:</b> ${failed.length}\n<b>English Words:</b> ${(status?.translatedWords || 0).toLocaleString()}\n<b>Reason:</b> ${message}`,
+                'error'
+              );
+            }
           }
           return;
         }
@@ -224,39 +267,107 @@ export class TranslationScheduler {
     workerId: string
   ): Promise<void> {
     try {
-      // Translate chunk using Gemini with safe MAX_TOKENS handling
-      const translatedText = await translateChunkSafely(chunk.originalText, keyState.key);
+      // Safety-blocked chunks are permanently routed to Google Translate.
+      // They never go back to Gemini, preventing repeated policy-block retries.
+      const useGoogleFallback = chunk.translationProvider === 'google_translate_fallback';
+      let translatedText: string;
+
+      if (useGoogleFallback) {
+        translatedText = await translateWithGoogleFallback(chunk.originalText);
+      } else {
+        translatedText = await translateChunkSafely(chunk.originalText, keyState.key);
+      }
 
       // Complete chunk atomically (validates worker claim to prevent duplicate finalization)
       const completed = await Store.completeChunk(jobId, chunk.id, workerId, translatedText);
       if (!completed) {
-        console.warn(`[Omni Scheduler] Worker ${workerId} could not finalize chunk ${chunk.id}`);
+        const current = await Store.getChunk(jobId, chunk.id);
+        if (current?.validationError) {
+          keyState.cooldownUntil = Date.now() + 5000;
+          console.warn(`[Omni Scheduler] Chunk ${chunk.id} failed translation validation: ${current.validationError}`);
+        } else {
+          console.warn(`[Omni Scheduler] Worker ${workerId} could not finalize chunk ${chunk.id}`);
+        }
       }
     } catch (err: any) {
       console.error(`[Omni Scheduler] Error translating chunk ${chunk.id}:`, err);
 
-      if (err instanceof GeminiAuthError) {
-        // Invalid Key format (e.g. 401 unauthenticated / unsupported access token)
-        // Disable this key for 24 hours so it won't be retried
-        keyState.cooldownUntil = Date.now() + 86400000;
-        console.warn(
-          `[Omni Scheduler] Key ${keyState.key.slice(0, 6)}... failed authentication. Disabling key.`
+      if (err instanceof GeminiSafetyError && chunk.translationProvider !== 'google_translate_fallback') {
+        // Explicit Gemini content blocks are never retried against Gemini.
+        // Permanently switch this chunk to the no-key Google Translate fallback.
+        await Store.withLock(`claim_${jobId}`, async () => {
+          const blocked = await Store.getChunk(jobId, chunk.id);
+          if (blocked && blocked.status !== 'completed') {
+            blocked.status = 'pending';
+            blocked.translationProvider = 'google_translate_fallback';
+            blocked.claimedBy = null;
+            blocked.leaseExpiresAt = null;
+            blocked.error = `Gemini safety block; switched to Google Translate fallback: ${err.message}`;
+            blocked.validationError = null;
+            blocked.updatedAt = Date.now();
+            await Store.updateChunk(blocked);
+          }
+        });
+
+        console.warn(`[Omni Scheduler] Chunk ${chunk.id} was safety-blocked by Gemini; permanently switching it to Google Translate fallback.`);
+        sendTelegramNotification(
+          `🔄 <b>Google Translate Fallback</b>\n<b>Novel:</b> ${(await Store.getJob(jobId))?.filename || jobId}\n<b>Chunk:</b> ${chunk.chunkIndex + 1}\n<b>Reason:</b> ${err.message}\n<b>Action:</b> Gemini will not retry this blocked chunk.`,
+          'error'
         );
-        await Store.releaseChunk(jobId, chunk.id, err.message);
+      } else if (err instanceof GeminiAuthError) {
+        keyState.cooldownUntil = Date.now() + 86400000;
+        keyState.disabledReason = '401 authentication failed';
+        console.warn(`[Omni Scheduler] Key ${keyState.key.slice(0, 6)}... authentication failed. Key disabled.`);
+        await Store.releaseChunk(jobId, chunk.id, err.message, false);
+      } else if (err instanceof GeminiPermissionError) {
+        keyState.cooldownUntil = Date.now() + 86400000;
+        keyState.disabledReason = '403 permission denied / key restriction';
+        console.warn(`[Omni Scheduler] Key ${keyState.key.slice(0, 6)}... permission denied. Key disabled.`);
+        await Store.releaseChunk(jobId, chunk.id, err.message, false);
+      } else if (err instanceof GeminiModelError) {
+        // A 404 is a configuration/model problem, not a bad API key. Stop safely
+        // with an actionable message rather than disabling every key.
+        const message = `Gemini model/configuration error: ${err.message}`;
+        await Store.releaseChunk(jobId, chunk.id, message, false);
+        this.activeJobs.delete(jobId);
+        await Store.updateJob(jobId, { status: 'paused', error: message });
+        sendTelegramNotification(`⚠️ <b>Gemini Configuration Error</b>\n<b>Novel:</b> ${(await Store.getJob(jobId))?.filename || jobId}\n<b>Reason:</b> ${message}`, 'error');
+      } else if (err instanceof GeminiRequestError) {
+        const message = err.message;
+        await Store.releaseChunk(jobId, chunk.id, message, false);
+        this.activeJobs.delete(jobId);
+        await Store.updateJob(jobId, { status: 'paused', error: message });
+        sendTelegramNotification(`⚠️ <b>Gemini Request Error</b>\n<b>Novel:</b> ${(await Store.getJob(jobId))?.filename || jobId}\n<b>Reason:</b> ${message}`, 'error');
       } else if (err instanceof GeminiRateLimitError) {
-        // 429 Failover:
-        // 1. Put this key into cooldown
         const cooldownMs = (err.retryAfterSeconds || 30) * 1000;
         keyState.cooldownUntil = Date.now() + cooldownMs;
-        console.warn(
-          `[Omni Scheduler] Key ${keyState.key.slice(-6)} received 429. Backing off for ${err.retryAfterSeconds}s.`
+        if (err.quotaKind === 'daily_quota') {
+          keyState.disabledReason = `429 daily quota exhausted (retry in ${err.retryAfterSeconds}s)`;
+        }
+        const label = err.quotaKind === 'daily_quota' ? 'daily quota' : 'temporary rate limit';
+        console.warn(`[Omni Scheduler] Key ${keyState.key.slice(-6)} received ${label}. Backing off for ${err.retryAfterSeconds}s.`);
+        await Store.releaseChunk(
+          jobId,
+          chunk.id,
+          `429 ${label} (cooldown ${err.retryAfterSeconds}s)`,
+          false
         );
-
-        // 2. Return chunk to pending immediately so other keys can pick it up
-        await Store.releaseChunk(jobId, chunk.id, `429 Rate limited (cooldown ${err.retryAfterSeconds}s)`);
       } else {
-        // Other error (timeout, network, 5xx): release chunk back to pending for retry
+        // Other error (timeout, network, 5xx): bounded retry. Never mark the
+        // source as translated when the provider failed.
         await Store.releaseChunk(jobId, chunk.id, err.message || String(err));
+      }
+
+      const afterError = await Store.getChunk(jobId, chunk.id);
+      if (afterError?.status === 'failed') {
+        const status = await Store.getJobStatus(jobId);
+        const message = `Chunk ${chunk.chunkIndex + 1} failed after ${afterError.retries} attempts: ${afterError.error || 'unknown error'}`;
+        this.activeJobs.delete(jobId);
+        await Store.updateJob(jobId, { status: 'failed', error: message });
+        sendTelegramNotification(
+          `❌ <b>Translation Failed</b>\n<b>Novel:</b> ${status?.filename || jobId}\n<b>Chunk:</b> ${chunk.chunkIndex + 1}/${status?.totalChunks || '?'}\n<b>English Words:</b> ${(status?.translatedWords || 0).toLocaleString()}\n<b>Reason:</b> ${message}`,
+          'error'
+        );
       }
     } finally {
       // Always release key

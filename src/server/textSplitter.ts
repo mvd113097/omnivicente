@@ -166,9 +166,16 @@ export function createOptimizedBatches(
   function flushBatch() {
     if (currentBatchChapters.length === 0) return;
 
-    const originalText = currentBatchChapters.map((c) => c.text).join('\n\n');
     const chapterIndices = currentBatchChapters.map((c) => c.index);
     const chapterTitles = currentBatchChapters.map((c) => c.title);
+    // Explicit control markers make multi-chapter batches lossless: the model
+    // must return the same markers in the same order, allowing deterministic
+    // reassembly instead of guessing chapter boundaries from translated text.
+    const originalText = currentBatchChapters.length > 1
+      ? currentBatchChapters.map((c) =>
+          `<<<OMNI_CHAPTER_START index=\"${c.index}\">>>\n${c.text}\n<<<OMNI_CHAPTER_END index=\"${c.index}\">>>`
+        ).join('\n\n')
+      : currentBatchChapters[0].text;
 
     batches.push({
       id: `b_${batches.length}`,
@@ -238,6 +245,25 @@ export function splitTranslatedBatch(
   }
 
   const cleanTranslated = translatedText.replace(/\r\n/g, '\n');
+
+  // Preferred path: exact control markers emitted by the translator.
+  const markerPattern = /<<<OMNI_CHAPTER_START\s+index=\"(\d+)\">>>([\s\S]*?)<<<OMNI_CHAPTER_END\s+index=\"(\d+)\">>>/g;
+  const markerMatches = [...cleanTranslated.matchAll(markerPattern)];
+  if (markerMatches.length === chapterIndices.length) {
+    let valid = true;
+    for (let i = 0; i < markerMatches.length; i++) {
+      const startIndex = Number(markerMatches[i][1]);
+      const endIndex = Number(markerMatches[i][3]);
+      if (startIndex !== chapterIndices[i] || endIndex !== chapterIndices[i]) {
+        valid = false;
+        break;
+      }
+      result.set(chapterIndices[i], markerMatches[i][2].trim());
+    }
+    if (valid) return result;
+    result.clear();
+  }
+
   const splitPoints: { chapterIndex: number; startIdx: number }[] = [];
 
   // Chapter 0 in batch starts at index 0

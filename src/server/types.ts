@@ -13,6 +13,8 @@ export interface Job {
   totalChapters: number;
   totalChunks: number;
   completedChunks: number;
+  translatedWords?: number;
+  contiguousTranslatedWords?: number;
   status: JobStatus;
   createdAt: number;
   updatedAt: number;
@@ -37,6 +39,8 @@ export interface Chunk {
   retries: number;
   error?: string | null;
   updatedAt: number;
+  validationError?: string | null;
+  translationProvider?: 'gemini' | 'google_translate_fallback';
 }
 
 export interface JobStatusResponse {
@@ -50,6 +54,7 @@ export interface JobStatusResponse {
   completedChunks: number;
   percentage: number;
   translatedWords: number;
+  contiguousTranslatedWords: number;
   error?: string | null;
   updatedAt: number;
 }
@@ -64,4 +69,8 @@ export interface TelegramSettings {
   notifyStart: boolean;
   notifyProgress: boolean;
   notifyComplete: boolean;
+  notifyPause: boolean;
+  notifyResume: boolean;
+  notifyError: boolean;
+  notifyWaiting: boolean;
 }

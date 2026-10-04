@@ -31,6 +31,7 @@ interface JobStatus {
   completedChunks: number;
   percentage: number;
   translatedWords: number;
+  contiguousTranslatedWords: number;
   error?: string | null;
   updatedAt: number;
 }
@@ -58,6 +59,10 @@ export default function App() {
   const [notifyStart, setNotifyStart] = useState(true);
   const [notifyProgress, setNotifyProgress] = useState(true);
   const [notifyComplete, setNotifyComplete] = useState(true);
+  const [notifyPause, setNotifyPause] = useState(true);
+  const [notifyResume, setNotifyResume] = useState(true);
+  const [notifyError, setNotifyError] = useState(true);
+  const [notifyWaiting, setNotifyWaiting] = useState(true);
   const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isTestingTelegram, setIsTestingTelegram] = useState(false);
   const [telegramTestStatus, setTelegramTestStatus] = useState<{
@@ -85,6 +90,10 @@ export default function App() {
         setNotifyStart(data.notifyStart !== false);
         setNotifyProgress(data.notifyProgress !== false);
         setNotifyComplete(data.notifyComplete !== false);
+        setNotifyPause(data.notifyPause !== false);
+        setNotifyResume(data.notifyResume !== false);
+        setNotifyError(data.notifyError !== false);
+        setNotifyWaiting(data.notifyWaiting !== false);
       }
     } catch (err) {
       console.error('Failed to fetch Telegram settings:', err);
@@ -114,6 +123,10 @@ export default function App() {
           notifyStart,
           notifyProgress,
           notifyComplete,
+          notifyPause,
+          notifyResume,
+          notifyError,
+          notifyWaiting,
         }),
       });
 
@@ -219,8 +232,8 @@ export default function App() {
     // Initial fetch
     poll();
 
-    // Set interval for polling (every 3 seconds when translating, 8 seconds otherwise)
-    const intervalMs = jobStatus?.status === 'translating' ? 3000 : 8000;
+    // Set interval for polling (5 seconds while translating, 15 seconds otherwise)
+    const intervalMs = jobStatus?.status === 'translating' ? 5000 : 15000;
     timer = setInterval(poll, intervalMs);
 
     const handleVisibilityChange = () => {
@@ -251,13 +264,31 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      let res: Response;
 
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      // Compress large TXT uploads in the browser when gzip is supported.
+      // Falls back to the normal multipart upload on older browsers.
+      if ('CompressionStream' in window && file.size > 256 * 1024) {
+        const CompressionStreamCtor = (window as any).CompressionStream;
+        const compressedStream = file.stream().pipeThrough(new CompressionStreamCtor('gzip'));
+        const compressedBlob = await new Response(compressedStream).blob();
+        res = await fetch('/api/upload-compressed', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Omni-Content-Encoding': 'gzip',
+            'X-Omni-Filename': encodeURIComponent(file.name),
+          },
+          body: compressedBlob,
+        });
+      } else {
+        const formData = new FormData();
+        formData.append('file', file);
+        res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+      }
 
       const data = await res.json();
       if (!res.ok) {
@@ -406,15 +437,15 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
       {/* Top Header Bar */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+        <div className="max-w-4xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
               Ω
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold tracking-tight text-slate-900">Omni Translator</h1>
-                <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                <h1 className="text-sm sm:text-base font-bold tracking-tight text-slate-900">Omni Translator</h1>
+                <span className="hidden xs:inline text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
                   ZH → EN
                 </span>
               </div>
@@ -430,11 +461,11 @@ export default function App() {
                 setTestsModalOpen(true);
                 if (!testResults) handleRunTests();
               }}
-              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
               title="Run Automated Verification Tests"
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">Verification Tests</span>
+              <span className="hidden md:inline">Tests</span>
             </button>
 
             <button
@@ -442,21 +473,21 @@ export default function App() {
                 setSettingsModalOpen(true);
                 fetchTelegramSettings();
               }}
-              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
               title="Telegram Notifications & Settings"
             >
               <Settings className="w-3.5 h-3.5 text-blue-600" />
-              <span>Telegram Settings</span>
+              <span className="hidden sm:inline">Telegram</span>
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-6 py-3 sm:py-5">
         {/* Error Alert */}
         {errorMessage && (
-          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-3 text-sm text-rose-800">
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-3 text-sm text-rose-800">
             <div className="flex items-start gap-2.5">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <span>{errorMessage}</span>
@@ -472,14 +503,14 @@ export default function App() {
 
         {/* View 1: No Active Job - Upload TXT */}
         {!jobStatus && (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-10 shadow-xs text-center">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-7 shadow-xs text-center">
             <div className="max-w-md mx-auto">
-              <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
-                <Upload className="w-7 h-7" />
+              <div className="w-11 h-11 mx-auto mb-2.5 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+                <Upload className="w-5 h-5" />
               </div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">Upload Chinese Novel TXT</h2>
-              <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-                Automatic chapter boundary detection, paragraph-aware chunking, and persistent server-side background translation.
+              <h2 className="text-lg font-bold text-slate-900 mb-1.5">Upload Chinese Novel TXT</h2>
+              <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                Drop a TXT novel to start translating.
               </p>
 
               <div
@@ -490,7 +521,7 @@ export default function App() {
                     handleFileUpload(e.dataTransfer.files[0]);
                   }
                 }}
-                className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-8 cursor-pointer transition-colors bg-slate-50/50 hover:bg-blue-50/20"
+                className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-5 sm:p-6 cursor-pointer transition-colors bg-slate-50/50 hover:bg-blue-50/20"
                 onClick={() => fileInputRef.current?.click()}
               >
                 <input
@@ -502,11 +533,11 @@ export default function App() {
                     if (e.target.files?.[0]) handleFileUpload(e.target.files[0]);
                   }}
                 />
-                <FileText className="w-10 h-10 text-slate-400 mx-auto mb-3" />
-                <p className="text-sm font-semibold text-slate-800">
+                <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-xs sm:text-sm font-semibold text-slate-800">
                   {isUploading ? 'Ingesting and parsing chapters...' : 'Click to select or drag & drop TXT file'}
                 </p>
-                <p className="text-xs text-slate-400 mt-1">Supports large novels with 1,000,000+ Chinese characters</p>
+                <p className="text-[10px] sm:text-xs text-slate-400 mt-1">1M+ characters · compressed upload</p>
               </div>
 
 
@@ -516,13 +547,13 @@ export default function App() {
 
         {/* View 2: Active Novel Job Dashboard */}
         {jobStatus && (
-          <div className="space-y-6">
+          <div className="space-y-3 sm:space-y-4">
             {/* Novel Card */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                 <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
-                    <BookOpen className="w-5 h-5" />
+                  <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                    <BookOpen className="w-4 h-4" />
                   </div>
                   <div>
                     <h2 className="text-base font-bold text-slate-900 truncate max-w-sm sm:max-w-md">
@@ -555,36 +586,24 @@ export default function App() {
                     {jobStatus.status === 'completed' && <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />}
                     {jobStatus.status === 'paused' && <Pause className="w-3.5 h-3.5 text-amber-600" />}
                     {jobStatus.status === 'translating'
-                      ? 'Translating in Background (Safe to Close)'
+                      ? 'Translating'
                       : jobStatus.status === 'completed'
-                      ? 'Completed (100%)'
+                      ? 'Complete'
                       : jobStatus.status === 'paused'
                       ? 'Paused'
-                      : 'Ready to Start'}
+                      : 'Ready'}
                   </span>
                 </div>
               </div>
 
-              {/* Live Background Running Banner: Visible when translating */}
-              {jobStatus.status === 'translating' && (
-                <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-950 shadow-xs">
-                  <div className="flex items-center gap-2.5">
-                    <span className="relative flex h-3 w-3 shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-600"></span>
-                    </span>
-                    <div>
-                      <span className="font-bold">Translation Actively Running on Server</span>
-                      <span className="text-emerald-800 ml-1.5">
-                        — You can safely close your browser or lock your phone. The translation continues in the background.
-                      </span>
-                    </div>
-                  </div>
+              {jobStatus.error && (
+                <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                  <strong>Server status:</strong> {jobStatus.error}
                 </div>
               )}
 
               {/* Progress Bar & Tabular Numerals */}
-              <div className="py-5">
+              <div className="py-3">
                 <div className="flex items-center justify-between text-xs text-slate-600 mb-2 font-mono">
                   <span className="font-semibold text-slate-900">
                     {jobStatus.percentage}% TRANSLATED
@@ -593,37 +612,37 @@ export default function App() {
                     {jobStatus.completedChunks} / {jobStatus.totalChunks} Chunks
                   </span>
                 </div>
-                <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
                   <div
                     className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
                     style={{ width: `${Math.max(2, jobStatus.percentage)}%` }}
                   />
                 </div>
 
-                {/* Never-Skip Contiguous Export & Word Count Info */}
-                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <span className="text-slate-400 block mb-0.5">English Words Ready</span>
+                {/* Contiguous Export & Word Count Info */}
+                <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">English Words</span>
                     <span className="text-sm font-semibold font-mono text-blue-700">
                       {jobStatus.translatedWords ? jobStatus.translatedWords.toLocaleString() : '0'} words
                     </span>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
                     <span className="text-slate-400 block mb-0.5">Completed Chapters</span>
                     <span className="text-sm font-semibold font-mono text-slate-800">
                       {jobStatus.completedChapters} / {jobStatus.totalChapters}
                     </span>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <span className="text-slate-400 block mb-0.5">Never-Skip Contiguous</span>
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">Contiguous</span>
                     <span className="text-sm font-semibold font-mono text-emerald-700">
                       {jobStatus.exportableChapters > 0
                         ? `Ch 1 – ${jobStatus.exportableChapters}`
                         : 'Translating Ch 1...'}
                     </span>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <span className="text-slate-400 block mb-0.5">Server Engine</span>
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">Server</span>
                     <span className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-500" />
                       Persistent
@@ -632,18 +651,18 @@ export default function App() {
                 </div>
 
                 <p className="text-[11px] text-slate-400 mt-3 text-center sm:text-left">
-                  Translation runs entirely on the server. You can safely lock your screen or close this tab anytime.
+                  Server translation continues if you close the tab.
                 </p>
               </div>
 
               {/* Primary Action Controls */}
-              <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+              <div className="pt-3 border-t border-slate-100 flex items-center gap-2">
+                <div className="flex-1 flex items-center gap-2">
                   {jobStatus.status === 'pending' && (
                     <button
                       onClick={handleStart}
                       disabled={isActionLoading}
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                       <Play className="w-3.5 h-3.5 fill-current" />
                       Start Translation
@@ -654,18 +673,18 @@ export default function App() {
                     <button
                       onClick={handlePause}
                       disabled={isActionLoading}
-                      className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                       <Pause className="w-3.5 h-3.5 fill-current" />
                       Pause Translation
                     </button>
                   )}
 
-                  {jobStatus.status === 'paused' && (
+                  {(jobStatus.status === 'paused' || jobStatus.status === 'failed') && (
                     <button
                       onClick={handleResume}
                       disabled={isActionLoading}
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                       <Play className="w-3.5 h-3.5 fill-current" />
                       Resume Translation
@@ -677,7 +696,7 @@ export default function App() {
                   type="button"
                   onClick={() => setDeleteConfirmOpen(true)}
                   disabled={isActionLoading}
-                  className="px-3.5 py-2 text-xs text-rose-600 hover:text-rose-700 bg-rose-50/70 hover:bg-rose-100/70 border border-rose-200/80 rounded-xl transition-colors font-medium cursor-pointer flex items-center gap-1.5"
+                  className="ml-auto px-2.5 py-2 text-xs text-rose-600 hover:text-rose-700 bg-rose-50/70 hover:bg-rose-100/70 border border-rose-200/80 rounded-xl transition-colors font-medium cursor-pointer flex items-center gap-1.5"
                   title="Delete this novel and reset workspace"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-500" />
@@ -687,40 +706,40 @@ export default function App() {
             </div>
 
             {/* DOWNLOAD SECTION (Prominent and clearly visible) */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
-              <div className="flex items-center justify-between mb-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+              <div className="flex items-center justify-between mb-2.5">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">
                     {jobStatus.status === 'completed'
-                      ? 'Download Final Translated Novel'
-                      : 'Download Current Progress (Never-Skip)'}
+                      ? 'Final Download'
+                      : 'Current Progress'}
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
                     {jobStatus.status === 'completed'
-                      ? 'All chapters have completed translation successfully.'
-                      : 'Download contiguous chapters right now while translation continues uninterrupted.'}
+                      ? 'All chapters ready.'
+                      : 'Only validated contiguous chapters are included.'}
                   </p>
                 </div>
 
-                <div className="text-xs font-mono text-slate-500 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200">
+                <div className="text-[10px] sm:text-xs font-mono text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-200 shrink-0">
                   {jobStatus.exportableChapters} Contiguous Chapters Ready
                 </div>
               </div>
 
               {jobStatus.exportableChapters === 0 ? (
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-center text-xs text-slate-500">
-                  First chapter is currently translating. Current EPUB/TXT download will become available as soon as Chapter 1 completes.
+                <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 text-center text-[10px] sm:text-xs text-slate-500">
+                  Waiting for the first complete chapter.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => handleDownload('epub')}
                     disabled={isDownloading !== null}
-                    className="p-4 bg-blue-50/60 hover:bg-blue-100/60 border border-blue-200 rounded-xl flex items-center justify-between text-blue-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
+                    className="p-2.5 sm:p-3 bg-blue-50/60 hover:bg-blue-100/60 border border-blue-200 rounded-xl flex items-center justify-between text-blue-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
                         {isDownloading === 'epub' ? (
                           <RefreshCw className="w-4 h-4 animate-spin" />
                         ) : (
@@ -728,15 +747,15 @@ export default function App() {
                         )}
                       </div>
                       <div>
-                        <span className="text-xs font-bold block">
+                        <span className="text-[11px] sm:text-xs font-bold block truncate">
                           {jobStatus.status === 'completed'
-                            ? 'Download Final EPUB'
-                            : `Download Current EPUB (Ch 1–${jobStatus.exportableChapters})`}
+                            ? 'Final EPUB'
+                            : `EPUB · Ch 1–${jobStatus.exportableChapters}`}
                         </span>
-                        <span className="text-[11px] text-blue-700/80">
+                        <span className="text-[10px] text-blue-700/80">
                           {isDownloading === 'epub'
                             ? 'Preparing EPUB file...'
-                            : 'Ready for Moon+ Reader, Kindle, Apple Books'}
+                            : 'Reader-ready'}
                         </span>
                       </div>
                     </div>
@@ -747,10 +766,10 @@ export default function App() {
                     type="button"
                     onClick={() => handleDownload('txt')}
                     disabled={isDownloading !== null}
-                    className="p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between text-slate-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
+                    className="p-2.5 sm:p-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between text-slate-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-slate-700 text-white flex items-center justify-center shrink-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-slate-700 text-white flex items-center justify-center shrink-0">
                         {isDownloading === 'txt' ? (
                           <RefreshCw className="w-4 h-4 animate-spin" />
                         ) : (
@@ -758,15 +777,15 @@ export default function App() {
                         )}
                       </div>
                       <div>
-                        <span className="text-xs font-bold block">
+                        <span className="text-[11px] sm:text-xs font-bold block truncate">
                           {jobStatus.status === 'completed'
-                            ? 'Download Final TXT'
-                            : `Download Current TXT (Ch 1–${jobStatus.exportableChapters})`}
+                            ? 'Final TXT'
+                            : `TXT · Ch 1–${jobStatus.exportableChapters}`}
                         </span>
-                        <span className="text-[11px] text-slate-500">
+                        <span className="text-[10px] text-slate-500">
                           {isDownloading === 'txt'
                             ? 'Preparing TXT file...'
-                            : 'Clean plain-text format'}
+                            : 'Plain text'}
                         </span>
                       </div>
                     </div>
@@ -825,7 +844,7 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Telegram Notification Settings</h3>
-                  <p className="text-[11px] text-slate-500">Configure bot notifications for translation updates</p>
+                  <p className="text-[10px] text-slate-500">Configure bot notifications for translation updates</p>
                 </div>
               </div>
               <button
@@ -915,6 +934,23 @@ export default function App() {
                     className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                   />
                 </label>
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5"><Pause className="w-3.5 h-3.5 text-amber-600" /> Notify when paused</span>
+                  <input type="checkbox" checked={notifyPause} onChange={(e) => setNotifyPause(e.target.checked)} className="w-4 h-4 text-blue-600 rounded border-slate-300 cursor-pointer" />
+                </label>
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5"><Play className="w-3.5 h-3.5 text-blue-600" /> Notify when resumed</span>
+                  <input type="checkbox" checked={notifyResume} onChange={(e) => setNotifyResume(e.target.checked)} className="w-4 h-4 text-blue-600 rounded border-slate-300 cursor-pointer" />
+                </label>
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 text-rose-600" /> Notify on errors or blocked chunks</span>
+                  <input type="checkbox" checked={notifyError} onChange={(e) => setNotifyError(e.target.checked)} className="w-4 h-4 text-blue-600 rounded border-slate-300 cursor-pointer" />
+                </label>
+                <label className="flex items-center justify-between text-slate-700 cursor-pointer">
+                  <span className="flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5 text-amber-600" /> Notify when free capacity is exhausted</span>
+                  <input type="checkbox" checked={notifyWaiting} onChange={(e) => setNotifyWaiting(e.target.checked)} className="w-4 h-4 text-blue-600 rounded border-slate-300 cursor-pointer" />
+                </label>
+
               </div>
 
               {/* Status Banner */}
@@ -1036,10 +1072,10 @@ export default function App() {
       )}
 
       {/* Quiet Footer */}
-      <footer className="mt-auto border-t border-slate-200 bg-white py-4">
+      <footer className="hidden sm:block mt-auto border-t border-slate-200 bg-white py-2">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-400 gap-2">
           <span>Omni Translator · Server Persistent Chinese Web-Novel Engine</span>
-          <span>Never-Skip Contiguous Export Guaranteed</span>
+          <span>Contiguous Export Guaranteed</span>
         </div>
       </footer>
     </div>

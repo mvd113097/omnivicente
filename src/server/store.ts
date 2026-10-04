@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Chunk, Job, JobStatus, JobStatusResponse, TelegramSettings } from './types.js';
 import { splitTranslatedBatch } from './textSplitter.js';
+import { hasExpectedChapterMarkers, validateTranslation } from './translationValidator.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const JOBS_DIR = path.join(DATA_DIR, 'jobs');
@@ -21,10 +22,22 @@ function ensureDirs() {
 
 ensureDirs();
 
-function atomicWriteJson(filePath: string, data: unknown) {
+async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
   const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
-  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+  const json = JSON.stringify(data);
+  await fs.promises.writeFile(tempPath, json, 'utf-8');
+  await fs.promises.rename(tempPath, filePath);
+}
+
+function atomicWriteJsonSync(filePath: string, data: unknown): void {
+  const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
+  fs.writeFileSync(tempPath, JSON.stringify(data), 'utf-8');
   fs.renameSync(tempPath, filePath);
+}
+
+function countEnglishWords(text: string): number {
+  const clean = text.replace(/<<<OMNI_CHAPTER_(?:START|END)\s+index=\"\d+\">>>/g, ' ').trim();
+  return clean ? clean.split(/\s+/).filter(Boolean).length : 0;
 }
 
 function readJson<T>(filePath: string): T | null {
@@ -67,7 +80,7 @@ export class Store {
     ensureDirs();
     this.jobsCache.set(job.id, job);
     const jobPath = path.join(JOBS_DIR, `${job.id}.json`);
-    atomicWriteJson(jobPath, job);
+    await atomicWriteJson(jobPath, job);
   }
 
   static async getJob(jobId: string): Promise<Job | null> {
@@ -124,7 +137,7 @@ export class Store {
     for (const chunk of chunks) {
       chunkMap.set(chunk.id, chunk);
       const chunkPath = path.join(jobChunksDir, `${chunk.id}.json`);
-      atomicWriteJson(chunkPath, chunk);
+      await atomicWriteJson(chunkPath, chunk);
     }
   }
 
@@ -190,7 +203,7 @@ export class Store {
     this.chunksCache.get(chunk.jobId)!.set(chunk.id, chunk);
 
     const chunkPath = path.join(jobChunksDir, `${chunk.id}.json`);
-    atomicWriteJson(chunkPath, chunk);
+    await atomicWriteJson(chunkPath, chunk);
   }
 
   /**
@@ -251,29 +264,72 @@ export class Store {
       }
 
       const now = Date.now();
+
+      // Never allow an API response to become a successful chunk unless it
+      // passes the translation quality gate first. This protects the final
+      // EPUB/TXT from empty, mostly-Chinese, duplicated, or truncated output.
+      const validation = validateTranslation(chunk.originalText, translatedText);
+      const expectedIndices = chunk.chapterIndices && chunk.chapterIndices.length > 0
+        ? chunk.chapterIndices
+        : [chunk.chapterIndex];
+      const markersValid = hasExpectedChapterMarkers(translatedText, expectedIndices);
+
+      if (!validation.valid || !markersValid) {
+        const reason = !markersValid
+          ? `Chapter boundary markers are missing or out of order.`
+          : validation.reason || 'Translation failed quality validation.';
+        chunk.status = chunk.retries >= 2 ? 'failed' : 'pending';
+        chunk.translatedText = '';
+        chunk.claimedBy = null;
+        chunk.leaseExpiresAt = null;
+        chunk.validationError = reason;
+        chunk.error = reason;
+        chunk.retries = (chunk.retries || 0) + 1;
+        chunk.updatedAt = now;
+        await this.updateChunk(chunk);
+        return false;
+      }
+
       chunk.status = 'completed';
       chunk.translatedText = translatedText;
       chunk.claimedBy = null;
       chunk.leaseExpiresAt = null;
       chunk.error = null;
+      chunk.validationError = null;
       chunk.updatedAt = now;
-
-      await this.updateChunk(chunk);
 
       const cachedMap = this.chunksCache.get(jobId);
       const chunks = cachedMap ? Array.from(cachedMap.values()) : await this.getChunks(jobId);
       const completedCount = chunks.filter((c) => c.status === 'completed').length;
-      const isAllCompleted = completedCount === chunks.length;
-
+      const currentJob = await this.getJob(jobId);
+      const expectedChunkCount = currentJob?.totalChunks ?? chunks.length;
+      const isAllCompleted = chunks.length === expectedChunkCount && completedCount === expectedChunkCount;
+      const translatedWordsForChunk = countEnglishWords(translatedText);
       const jobUpdates: Partial<Job> = {
         completedChunks: completedCount,
+        translatedWords: (currentJob?.translatedWords ?? 0) + translatedWordsForChunk,
         updatedAt: now,
       };
+
+      // Recompute the contiguous export word count only when a chunk changes.
+      // This keeps 5-second status polling cheap while keeping contiguous
+      // partial-download metadata exact.
+      const contiguous = await this.getContiguousCompletedChapters(jobId, true);
+      const contiguousWords = contiguous.reduce((sum, ch) =>
+        sum + (ch.translatedContent.trim() ? ch.translatedContent.trim().split(/\s+/).filter(Boolean).length : 0), 0
+      );
+      jobUpdates.contiguousTranslatedWords = contiguousWords;
+
       if (isAllCompleted) {
         jobUpdates.status = 'completed';
       }
 
-      await this.updateJob(jobId, jobUpdates);
+      // These are independent files. Persist them concurrently so a completed
+      // Gemini request does not wait on two sequential disk writes.
+      await Promise.all([
+        this.updateChunk(chunk),
+        this.updateJob(jobId, jobUpdates),
+      ]);
       return true;
     });
   }
@@ -281,16 +337,29 @@ export class Store {
   /**
    * Releases a chunk back to pending (e.g. on 429 or worker release).
    */
-  static async releaseChunk(jobId: string, chunkId: string, errorMessage?: string): Promise<void> {
+  static async releaseChunk(
+    jobId: string,
+    chunkId: string,
+    errorMessage?: string,
+    countRetry: boolean = true
+  ): Promise<void> {
     await this.withLock(`claim_${jobId}`, async () => {
       const chunk = await this.getChunk(jobId, chunkId);
       if (!chunk) return;
       if (chunk.status === 'completed') return;
 
-      chunk.status = 'pending';
+      // Provider-level rate limiting is not a translation failure. A 429 means
+      // this particular Gemini project/key cannot serve the request right now,
+      // so the scheduler rotates to another key or waits for cooldown. Do not
+      // burn the chunk's finite retry budget while doing that.
+      if (countRetry) {
+        chunk.retries = (chunk.retries || 0) + 1;
+        chunk.status = chunk.retries >= 10 ? 'failed' : 'pending';
+      } else {
+        chunk.status = 'pending';
+      }
       chunk.claimedBy = null;
       chunk.leaseExpiresAt = null;
-      chunk.retries = (chunk.retries || 0) + 1;
       if (errorMessage) {
         chunk.error = errorMessage;
       }
@@ -323,15 +392,70 @@ export class Store {
   }
 
   /**
-   * HARD REQUIREMENT: NEVER-SKIP EXPORT ALGORITHM
-   * 1. Sort chapters by chapter index.
-   * 2. Examine chapters from Chapter 1 onward.
-   * 3. Verify that every chunk in the current chapter is complete.
-   * 4. Add the chapter only if ALL its chunks are complete.
-   * 5. Stop immediately at the first incomplete chapter.
-   * 6. Never inspect later chapters for export once a gap is found.
+   * Revalidates completed chunks before export. This is deliberately NOT used
+   * by normal status polling, so reopening the browser never scans/reprocesses
+   * the whole translated book.
    */
-  static async getContiguousCompletedChapters(jobId: string): Promise<
+  private static async getValidatedCompletedChunks(jobId: string): Promise<Chunk[]> {
+    const chunks = await this.getChunks(jobId);
+    const valid: Chunk[] = [];
+    for (const chunk of chunks) {
+      if (chunk.status !== 'completed') continue;
+      const result = validateTranslation(chunk.originalText, chunk.translatedText);
+      const indices = chunk.chapterIndices && chunk.chapterIndices.length > 0 ? chunk.chapterIndices : [chunk.chapterIndex];
+      if (!result.valid || !hasExpectedChapterMarkers(chunk.translatedText, indices)) {
+        chunk.status = 'failed';
+        chunk.validationError = result.reason || 'Stored translation failed validation.';
+        chunk.error = chunk.validationError;
+        chunk.claimedBy = null;
+        chunk.leaseExpiresAt = null;
+        await this.updateChunk(chunk);
+        await this.updateJob(jobId, { status: 'failed', error: `Stored completed chunk ${chunk.chunkIndex + 1} failed final validation: ${chunk.validationError}` });
+        continue;
+      }
+      valid.push(chunk);
+    }
+    return valid;
+  }
+
+  /**
+   * Lightweight Never-Skip boundary calculation for status polling.
+   * Unlike getContiguousCompletedChapters(), this does not build translated
+   * chapter text or split multi-chapter translations.
+   */
+  static async getContiguousCompletedChapterCount(jobId: string): Promise<number> {
+    const job = await this.getJob(jobId);
+    if (!job) return 0;
+
+    const chunks = await this.getChunks(jobId);
+    const chapterChunksMap = new Map<number, Chunk[]>();
+
+    for (const chunk of chunks) {
+      const indices =
+        chunk.chapterIndices && chunk.chapterIndices.length > 0
+          ? chunk.chapterIndices
+          : [chunk.chapterIndex];
+
+      for (const chIdx of indices) {
+        const list = chapterChunksMap.get(chIdx);
+        if (list) list.push(chunk);
+        else chapterChunksMap.set(chIdx, [chunk]);
+      }
+    }
+
+    let count = 0;
+    for (const chapter of job.chapters) {
+      const chChunks = chapterChunksMap.get(chapter.index) || [];
+      if (chChunks.length !== chapter.chunkCount || !chChunks.every((c) => c.status === 'completed')) {
+        break;
+      }
+      count++;
+    }
+
+    return count;
+  }
+
+  static async getContiguousCompletedChapters(jobId: string, ignorePartialThreshold: boolean = false): Promise<
     Array<{
       index: number;
       title: string;
@@ -341,7 +465,7 @@ export class Store {
     const job = await this.getJob(jobId);
     if (!job) return [];
 
-    const chunks = await this.getChunks(jobId);
+    const chunks = await this.getValidatedCompletedChunks(jobId);
 
     // Map each chapter index to all chunks that contain that chapter
     const chapterChunksMap = new Map<number, Chunk[]>();
@@ -367,7 +491,8 @@ export class Store {
       const chChunks = chapterChunksMap.get(ch.index) || [];
 
       // If chapter has no chunks or any chunk is not completed -> STOP IMMEDIATELY (Never-Skip rule)!
-      if (chChunks.length === 0) {
+      if (chChunks.length !== ch.chunkCount) {
+        // Missing source chunk(s) are a hard Never-Skip boundary.
         break;
       }
 
@@ -422,12 +547,14 @@ export class Store {
     const job = await this.getJob(jobId);
     if (!job) return null;
 
-    const exportable = await this.getContiguousCompletedChapters(jobId);
-    const chunks = await this.getChunks(jobId);
+    const [exportableChapterCount, chunks] = await Promise.all([
+      this.getContiguousCompletedChapterCount(jobId),
+      this.getChunks(jobId),
+    ]);
     const completedCount = chunks.filter((c) => c.status === 'completed').length;
     const totalCount = job.totalChunks || chunks.length || 1;
 
-    // Count completed chapters across all multi-chapter batch chunks
+    // Count completed chapters without constructing translated chapter text.
     const chapterChunksMap = new Map<number, Chunk[]>();
     for (const chunk of chunks) {
       const indices =
@@ -436,27 +563,32 @@ export class Store {
           : [chunk.chapterIndex];
 
       for (const chIdx of indices) {
-        if (!chapterChunksMap.has(chIdx)) {
-          chapterChunksMap.set(chIdx, []);
-        }
-        chapterChunksMap.get(chIdx)!.push(chunk);
+        const list = chapterChunksMap.get(chIdx);
+        if (list) list.push(chunk);
+        else chapterChunksMap.set(chIdx, [chunk]);
       }
     }
 
     let completedChaptersCount = 0;
-    for (const ch of job.chapters) {
-      const chChunks = chapterChunksMap.get(ch.index) || [];
+    for (const chapter of job.chapters) {
+      const chChunks = chapterChunksMap.get(chapter.index) || [];
       if (chChunks.length > 0 && chChunks.every((c) => c.status === 'completed')) {
         completedChaptersCount++;
       }
     }
 
-    // Calculate total English translated words across completed chunks
-    let totalWords = 0;
-    for (const chunk of chunks) {
-      if (chunk.status === 'completed' && chunk.translatedText) {
-        totalWords += chunk.translatedText.trim().split(/\s+/).filter(Boolean).length;
+    // The running total is persisted when each chunk completes, avoiding a full
+    // English-word recount on every 3-second frontend status poll.
+    let totalWords = job.translatedWords;
+    if (typeof totalWords !== 'number') {
+      totalWords = 0;
+      for (const chunk of chunks) {
+        if (chunk.status === 'completed' && chunk.translatedText) {
+          totalWords += countEnglishWords(chunk.translatedText);
+        }
       }
+      // Persist the recovered counter once for older jobs created before this field existed.
+      await this.updateJob(jobId, { translatedWords: totalWords });
     }
 
     const percentage = Math.floor((completedCount / totalCount) * 100);
@@ -467,11 +599,12 @@ export class Store {
       status: job.status,
       totalChapters: job.totalChapters,
       completedChapters: completedChaptersCount,
-      exportableChapters: exportable.length,
+      exportableChapters: exportableChapterCount,
       totalChunks: totalCount,
       completedChunks: completedCount,
       percentage,
       translatedWords: totalWords,
+      contiguousTranslatedWords: job.contiguousTranslatedWords || 0,
       error: job.error,
       updatedAt: job.updatedAt,
     };
@@ -585,7 +718,7 @@ export class Store {
           !k.startsWith('benchmark-key')
       )
       .slice(0, 5);
-    atomicWriteJson(KEYS_FILE, { keys: validKeys });
+    atomicWriteJsonSync(KEYS_FILE, { keys: validKeys });
   }
 
   static getTelegramSettings(): TelegramSettings {
@@ -598,6 +731,10 @@ export class Store {
         notifyStart: stored.notifyStart !== false,
         notifyProgress: stored.notifyProgress !== false,
         notifyComplete: stored.notifyComplete !== false,
+        notifyPause: stored.notifyPause !== false,
+        notifyResume: stored.notifyResume !== false,
+        notifyError: stored.notifyError !== false,
+        notifyWaiting: stored.notifyWaiting !== false,
       };
     }
 
@@ -611,17 +748,25 @@ export class Store {
       notifyStart: true,
       notifyProgress: true,
       notifyComplete: true,
+      notifyPause: true,
+      notifyResume: true,
+      notifyError: true,
+      notifyWaiting: true,
     };
   }
 
   static saveTelegramSettings(settings: TelegramSettings): void {
     ensureDirs();
-    atomicWriteJson(TELEGRAM_FILE, {
+    atomicWriteJsonSync(TELEGRAM_FILE, {
       botToken: (settings.botToken || '').trim(),
       chatIds: (settings.chatIds || []).map((id) => id.trim()).filter(Boolean).slice(0, 2),
       notifyStart: Boolean(settings.notifyStart),
       notifyProgress: Boolean(settings.notifyProgress),
       notifyComplete: Boolean(settings.notifyComplete),
+      notifyPause: settings.notifyPause !== false,
+      notifyResume: settings.notifyResume !== false,
+      notifyError: settings.notifyError !== false,
+      notifyWaiting: settings.notifyWaiting !== false,
     });
   }
 }

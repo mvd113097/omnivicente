@@ -1,0 +1,421 @@
+      console.error('Test run failed:', err);
+    } finally {
+      setIsRunningTests(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
+      {/* Top Header Bar */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div className="max-w-4xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+              Ω
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold tracking-tight text-slate-900">Omni Translator</h1>
+                <span className="hidden xs:inline text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                  ZH → EN
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 hidden sm:block">
+                Chinese Web-Novel to Natural English EPUB/TXT
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setTestsModalOpen(true);
+                if (!testResults) handleRunTests();
+              }}
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+              title="Run Automated Verification Tests"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden md:inline">Tests</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setSettingsModalOpen(true);
+                fetchTelegramSettings();
+              }}
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Telegram Notifications & Settings"
+            >
+              <Settings className="w-3.5 h-3.5 text-blue-600" />
+              <span className="hidden sm:inline">Telegram</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-6 py-3 sm:py-5">
+        {/* Error Alert */}
+        {errorMessage && (
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-3 text-sm text-rose-800">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-500 hover:text-rose-800 text-xs font-semibold px-2 py-0.5 rounded"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* View 1: No Active Job - Upload TXT */}
+        {!jobStatus && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-7 shadow-xs text-center">
+            <div className="max-w-md mx-auto">
+              <div className="w-11 h-11 mx-auto mb-2.5 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+                <Upload className="w-5 h-5" />
+              </div>
+              <h2 className="text-lg font-bold text-slate-900 mb-1.5">Upload Chinese Novel TXT</h2>
+              <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                Automatic chapter boundary detection, paragraph-aware chunking, and persistent server-side background translation.
+              </p>
+
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files?.[0]) {
+                    handleFileUpload(e.dataTransfer.files[0]);
+                  }
+                }}
+                className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-5 sm:p-6 cursor-pointer transition-colors bg-slate-50/50 hover:bg-blue-50/20"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".txt"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) handleFileUpload(e.target.files[0]);
+                  }}
+                />
+                <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-xs sm:text-sm font-semibold text-slate-800">
+                  {isUploading ? 'Ingesting and parsing chapters...' : 'Click to select or drag & drop TXT file'}
+                </p>
+                <p className="text-[10px] sm:text-xs text-slate-400 mt-1">1M+ characters · gzip upload compression</p>
+              </div>
+
+
+            </div>
+          </div>
+        )}
+
+        {/* View 2: Active Novel Job Dashboard */}
+        {jobStatus && (
+          <div className="space-y-3 sm:space-y-4">
+            {/* Novel Card */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900 truncate max-w-sm sm:max-w-md">
+                      {jobStatus.filename}
+                    </h2>
+                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                      <span>{jobStatus.totalChapters} Chapters</span>
+                      <span>·</span>
+                      <span>{jobStatus.totalChunks} Chunks</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status Badge */}
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                      jobStatus.status === 'translating'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : jobStatus.status === 'completed'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : jobStatus.status === 'paused'
+                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {jobStatus.status === 'translating' && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                    )}
+                    {jobStatus.status === 'completed' && <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />}
+                    {jobStatus.status === 'paused' && <Pause className="w-3.5 h-3.5 text-amber-600" />}
+                    {jobStatus.status === 'translating'
+                      ? 'Translating'
+                      : jobStatus.status === 'completed'
+                      ? 'Complete'
+                      : jobStatus.status === 'paused'
+                      ? 'Paused'
+                      : 'Ready'}
+                  </span>
+                </div>
+              </div>
+
+              {jobStatus.error && (
+                <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                  <strong>Server status:</strong> {jobStatus.error}
+                </div>
+              )}
+
+              {/* Progress Bar & Tabular Numerals */}
+              <div className="py-3">
+                <div className="flex items-center justify-between text-xs text-slate-600 mb-2 font-mono">
+                  <span className="font-semibold text-slate-900">
+                    {jobStatus.percentage}% TRANSLATED
+                  </span>
+                  <span>
+                    {jobStatus.completedChunks} / {jobStatus.totalChunks} Chunks
+                  </span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${Math.max(2, jobStatus.percentage)}%` }}
+                  />
+                </div>
+
+                {/* Contiguous Export & Word Count Info */}
+                <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">English Words</span>
+                    <span className="text-sm font-semibold font-mono text-blue-700">
+                      {jobStatus.translatedWords ? jobStatus.translatedWords.toLocaleString() : '0'} words
+                    </span>
+                  </div>
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">Completed Chapters</span>
+                    <span className="text-sm font-semibold font-mono text-slate-800">
+                      {jobStatus.completedChapters} / {jobStatus.totalChapters}
+                    </span>
+                  </div>
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">Contiguous</span>
+                    <span className="text-sm font-semibold font-mono text-emerald-700">
+                      {jobStatus.exportableChapters > 0
+                        ? `Ch 1 – ${jobStatus.exportableChapters}`
+                        : 'Translating Ch 1...'}
+                    </span>
+                  </div>
+                  <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-slate-400 block mb-0.5">Server</span>
+                    <span className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      Persistent
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-400 mt-3 text-center sm:text-left">
+                  Server translation continues if you close the tab.
+                </p>
+              </div>
+
+              {/* Primary Action Controls */}
+              <div className="pt-3 border-t border-slate-100 flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  {jobStatus.status === 'pending' && (
+                    <button
+                      onClick={handleStart}
+                      disabled={isActionLoading}
+                      className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      Start Translation
+                    </button>
+                  )}
+
+                  {jobStatus.status === 'translating' && (
+                    <button
+                      onClick={handlePause}
+                      disabled={isActionLoading}
+                      className="flex-1 sm:flex-none px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                      Pause Translation
+                    </button>
+                  )}
+
+                  {(jobStatus.status === 'paused' || jobStatus.status === 'failed') && (
+                    <button
+                      onClick={handleResume}
+                      disabled={isActionLoading}
+                      className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      Resume Translation
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  disabled={isActionLoading}
+                  className="ml-auto px-2.5 py-2 text-xs text-rose-600 hover:text-rose-700 bg-rose-50/70 hover:bg-rose-100/70 border border-rose-200/80 rounded-xl transition-colors font-medium cursor-pointer flex items-center gap-1.5"
+                  title="Delete this novel and reset workspace"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  Delete Novel
+                </button>
+              </div>
+            </div>
+
+            {/* DOWNLOAD SECTION (Prominent and clearly visible) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+              <div className="flex items-center justify-between mb-2.5">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {jobStatus.status === 'completed'
+                      ? 'Final Download'
+                      : 'Current Progress'}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {jobStatus.status === 'completed'
+                      ? 'All chapters ready.'
+                      : 'Only validated contiguous chapters are included.'}
+                  </p>
+                </div>
+
+                <div className="text-[10px] sm:text-xs font-mono text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-200 shrink-0">
+                  {jobStatus.exportableChapters} Contiguous Chapters Ready
+                </div>
+              </div>
+
+              {jobStatus.exportableChapters === 0 ? (
+                <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 text-center text-[10px] sm:text-xs text-slate-500">
+                  Waiting for the first complete chapter.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleDownload('epub')}
+                    disabled={isDownloading !== null}
+                    className="p-2.5 sm:p-3 bg-blue-50/60 hover:bg-blue-100/60 border border-blue-200 rounded-xl flex items-center justify-between text-blue-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+                        {isDownloading === 'epub' ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Download className="w-4 h-4" />
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold block">
+                          {jobStatus.status === 'completed'
+                            ? 'Download Final EPUB'
+                            : `Download Current EPUB (Ch 1–${jobStatus.exportableChapters})`}
+                        </span>
+                        <span className="text-[11px] text-blue-700/80">
+                          {isDownloading === 'epub'
+                            ? 'Preparing EPUB file...'
+                            : 'EPUB reader-ready'}
+                        </span>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-blue-400 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownload('txt')}
+                    disabled={isDownloading !== null}
+                    className="p-2.5 sm:p-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between text-slate-900 transition-colors group cursor-pointer text-left disabled:opacity-60"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-slate-700 text-white flex items-center justify-center shrink-0">
+                        {isDownloading === 'txt' ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <FileText className="w-4 h-4" />
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold block">
+                          {jobStatus.status === 'completed'
+                            ? 'Download Final TXT'
+                            : `Download Current TXT (Ch 1–${jobStatus.exportableChapters})`}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {isDownloading === 'txt'
+                            ? 'Preparing TXT file...'
+                            : 'Plain text'}
+                        </span>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Delete / Cancel Novel In-App Confirmation Modal */}
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200">
+            <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 text-center mb-1">
+              Delete Novel?
+            </h3>
+            <p className="text-xs text-slate-500 text-center mb-5 leading-relaxed">
+              This will stop background translation, remove this novel from the server, and clear your workspace so you can upload a new novel.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmOpen(false)}
+                className="flex-1 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeCancelNovel}
+                disabled={isActionLoading}
+                className="flex-1 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {isActionLoading ? 'Deleting...' : 'Delete Novel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Telegram Settings Modal */}
+      {settingsModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                  <Settings className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Telegram Notification Settings</h3>
+                  <p className="text-[11px] text-slate-500">Configure bot notifications for translation updates</p>
+                </div>
+              </div>
+              <button
