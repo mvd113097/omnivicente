@@ -1,0 +1,22 @@
+{
+  "id": "test_partial_txt_1791107671065",
+  "filename": "partial_txt.txt",
+  "totalChapters": 2,
+  "totalChunks": 2,
+  "completedChunks": 1,
+  "status": "translating",
+  "createdAt": 1791107671065,
+  "updatedAt": 1791107671065,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1: The Intro",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "Chapter 2: The Gap",
+      "chunkCount": 1
+    }
+  ]
+}

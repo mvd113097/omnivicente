@@ -1,0 +1,38 @@
+{
+  "id": "job_1791108502524_98w8r",
+  "filename": "仙道传奇_修仙传.txt",
+  "totalChapters": 5,
+  "totalChunks": 5,
+  "completedChunks": 5,
+  "status": "completed",
+  "createdAt": 1791108502524,
+  "updatedAt": 1791108502576,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "第一章 踏入修仙界",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "第二章 灵脉觉醒",
+      "chunkCount": 1
+    },
+    {
+      "index": 3,
+      "title": "第三章 宗门大比",
+      "chunkCount": 1
+    },
+    {
+      "index": 4,
+      "title": "第四章 禁地探秘",
+      "chunkCount": 1
+    },
+    {
+      "index": 5,
+      "title": "第五章 剑试天下",
+      "chunkCount": 1
+    }
+  ],
+  "error": null
+}

@@ -1,0 +1,13 @@
+{
+  "id": "c2",
+  "jobId": "test_partial_epub_1791107732075",
+  "chapterIndex": 2,
+  "chunkIndex": 0,
+  "originalText": "第二章",
+  "translatedText": "Chapter 2 text.",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791107732076
+}

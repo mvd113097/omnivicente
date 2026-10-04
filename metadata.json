@@ -1,0 +1,6 @@
+{
+  "name": "Omni Translator",
+  "description": "High-reliability Chinese web-novel translator to natural English EPUB/TXT with 5-key Gemini scheduling, background persistence, and Never-Skip exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

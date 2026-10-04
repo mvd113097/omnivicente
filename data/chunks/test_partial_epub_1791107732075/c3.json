@@ -1,0 +1,13 @@
+{
+  "id": "c3",
+  "jobId": "test_partial_epub_1791107732075",
+  "chapterIndex": 3,
+  "chunkIndex": 0,
+  "originalText": "第三章",
+  "translatedText": "",
+  "status": "pending",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791107732076
+}

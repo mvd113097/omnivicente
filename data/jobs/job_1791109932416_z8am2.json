@@ -1,0 +1,43 @@
+{
+  "id": "job_1791109932416_z8am2",
+  "filename": "ç©¿è¶ä¹å®å¨èéå¹³åè¿æ¥å­_åäºç« .txt",
+  "totalChapters": 6,
+  "totalChunks": 6,
+  "completedChunks": 0,
+  "status": "translating",
+  "createdAt": 1791109932416,
+  "updatedAt": 1791109932439,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Prologue / Introduction",
+      "chunkCount": 1
+    },
+    {
+      "index": 2,
+      "title": "第1章",
+      "chunkCount": 1
+    },
+    {
+      "index": 3,
+      "title": "第2章",
+      "chunkCount": 1
+    },
+    {
+      "index": 4,
+      "title": "第3章",
+      "chunkCount": 1
+    },
+    {
+      "index": 5,
+      "title": "第4章",
+      "chunkCount": 1
+    },
+    {
+      "index": 6,
+      "title": "第5章",
+      "chunkCount": 1
+    }
+  ],
+  "error": null
+}

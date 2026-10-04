@@ -1,0 +1,17 @@
+{
+  "id": "test_lease_1791107670968",
+  "filename": "stale.txt",
+  "totalChapters": 1,
+  "totalChunks": 1,
+  "completedChunks": 0,
+  "status": "translating",
+  "createdAt": 1791107670968,
+  "updatedAt": 1791107670968,
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Chapter 1",
+      "chunkCount": 1
+    }
+  ]
+}

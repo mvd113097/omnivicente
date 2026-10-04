@@ -1,0 +1,13 @@
+{
+  "id": "c1",
+  "jobId": "test_partial_txt_1791107671065",
+  "chapterIndex": 1,
+  "chunkIndex": 0,
+  "originalText": "内容",
+  "translatedText": "Partial txt translated content.",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791107671065
+}

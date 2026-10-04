@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "job": {
+      "title": "TranslationJob",
+      "description": "Represents an Omni Translator novel translation job.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "filename": { "type": "string" },
+        "totalChapters": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "completedChunks": { "type": "number" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "translating", "paused", "completed", "failed"]
+        },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "filename", "totalChapters", "totalChunks", "completedChunks", "status", "createdAt", "updatedAt"]
+    },
+    "chunk": {
+      "title": "TranslationChunk",
+      "description": "Represents an individual text chunk within a chapter.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "jobId": { "type": "string" },
+        "chapterIndex": { "type": "number" },
+        "chunkIndex": { "type": "number" },
+        "originalText": { "type": "string" },
+        "translatedText": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "translating", "completed", "failed"]
+        },
+        "claimedBy": { "type": "string" },
+        "leaseExpiresAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "jobId", "chapterIndex", "chunkIndex", "originalText", "status", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/jobs/{jobId}": {
+      "schema": "job",
+      "description": "Collection of translation jobs"
+    },
+    "/jobs/{jobId}/chunks/{chunkId}": {
+      "schema": "chunk",
+      "description": "Subcollection of chunks for a given job"
+    }
+  }
+}

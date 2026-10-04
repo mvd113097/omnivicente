@@ -1,0 +1,14 @@
+{
+  "id": "chunk_2",
+  "jobId": "test_epub_active_1791107670970",
+  "chapterIndex": 2,
+  "chunkIndex": 0,
+  "originalText": "第二章翻译中",
+  "translatedText": "[Translated EN] 第二章翻译中",
+  "status": "completed",
+  "claimedBy": null,
+  "leaseExpiresAt": null,
+  "retries": 0,
+  "updatedAt": 1791107732058,
+  "error": null
+}
